@@ -155,7 +155,7 @@ struct ContentView: View {
             }
 
             TreemapView(
-                nodes: store.nodes,
+                store: store,
                 rootId: store.zoomNodeId,
                 selectedId: store.selectedNodeId,
                 version: store.modelVersion,

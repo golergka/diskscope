@@ -8,7 +8,7 @@ private struct TreemapRect {
 }
 
 struct TreemapView: NSViewRepresentable {
-    let nodes: [UInt64: NativeNode]
+    let store: NativeScanStore
     let rootId: UInt64
     let selectedId: UInt64
     let version: UInt64
@@ -19,23 +19,31 @@ struct TreemapView: NSViewRepresentable {
         let view = TreemapCanvas()
         view.onSelect = onSelect
         view.onZoom = onZoom
-        view.update(nodes: nodes, rootId: rootId, selectedId: selectedId, version: version)
+        view.update(store: store, rootId: rootId, selectedId: selectedId, version: version)
         return view
     }
 
     func updateNSView(_ nsView: TreemapCanvas, context: Context) {
         nsView.onSelect = onSelect
         nsView.onZoom = onZoom
-        nsView.update(nodes: nodes, rootId: rootId, selectedId: selectedId, version: version)
+        nsView.update(store: store, rootId: rootId, selectedId: selectedId, version: version)
     }
 }
 
 final class TreemapCanvas: NSView {
-    private var nodes: [UInt64: NativeNode] = [:]
+    private weak var store: NativeScanStore?
     private var rootId: UInt64 = 0
     private var selectedId: UInt64 = 0
     private var modelVersion: UInt64 = 0
     private var rects: [TreemapRect] = []
+    private var layoutScheduled = false
+    private var layoutDirty = false
+    private var lastLayoutAt: CFAbsoluteTime = 0
+
+    private let maxDepth = 10
+    private let minRectArea: CGFloat = 9
+    private let maxRects = 20_000
+    private let minLayoutIntervalSeconds: CFAbsoluteTime = 0.12
 
     var onSelect: ((UInt64) -> Void)?
     var onZoom: ((UInt64) -> Void)?
@@ -44,22 +52,22 @@ final class TreemapCanvas: NSView {
         true
     }
 
-    func update(nodes: [UInt64: NativeNode], rootId: UInt64, selectedId: UInt64, version: UInt64) {
-        let layoutInputsChanged = version != modelVersion || rootId != self.rootId
-        if layoutInputsChanged {
-            self.nodes = nodes
-            self.rootId = rootId
-            modelVersion = version
-            recomputeLayout()
-        }
-
+    func update(store: NativeScanStore, rootId: UInt64, selectedId: UInt64, version: UInt64) {
+        let layoutInputsChanged = version != modelVersion || rootId != self.rootId || self.store !== store
+        self.store = store
+        self.rootId = rootId
+        modelVersion = version
         self.selectedId = selectedId
-        needsDisplay = true
+        if layoutInputsChanged {
+            scheduleLayout()
+        } else {
+            needsDisplay = true
+        }
     }
 
     override func layout() {
         super.layout()
-        recomputeLayout()
+        scheduleLayout(forceImmediate: true)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -81,7 +89,7 @@ final class TreemapCanvas: NSView {
         let darkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
 
         for item in rects {
-            guard let node = nodes[item.nodeId] else {
+            guard let node = store?.nodes[item.nodeId] else {
                 continue
             }
 
@@ -128,11 +136,47 @@ final class TreemapCanvas: NSView {
         return nil
     }
 
+    private func scheduleLayout(forceImmediate: Bool = false) {
+        layoutDirty = true
+        if layoutScheduled {
+            return
+        }
+        layoutScheduled = true
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let delay: CFAbsoluteTime
+        if forceImmediate || lastLayoutAt == 0 {
+            delay = 0
+        } else {
+            let elapsed = now - lastLayoutAt
+            delay = max(0, minLayoutIntervalSeconds - elapsed)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.layoutScheduled = false
+            guard self.layoutDirty else {
+                return
+            }
+            self.layoutDirty = false
+            self.lastLayoutAt = CFAbsoluteTimeGetCurrent()
+            self.recomputeLayout()
+            self.needsDisplay = true
+        }
+    }
+
     private func recomputeLayout() {
         guard bounds.width > 4, bounds.height > 4 else {
             rects = []
             return
         }
+        guard let store else {
+            rects = []
+            return
+        }
+        let nodes = store.nodes
 
         var output: [TreemapRect] = []
         let inset = bounds.insetBy(dx: 2, dy: 2)
@@ -140,7 +184,8 @@ final class TreemapCanvas: NSView {
             nodeId: rootId,
             rect: inset,
             depth: 0,
-            maxDepth: 10,
+            maxDepth: maxDepth,
+            nodes: nodes,
             out: &output
         )
         rects = output
@@ -151,9 +196,10 @@ final class TreemapCanvas: NSView {
         rect: CGRect,
         depth: Int,
         maxDepth: Int,
+        nodes: [UInt64: NativeNode],
         out: inout [TreemapRect]
     ) {
-        if depth >= maxDepth || rect.width < 2 || rect.height < 2 {
+        if out.count >= maxRects || depth >= maxDepth || rect.width < 2 || rect.height < 2 {
             return
         }
 
@@ -161,7 +207,7 @@ final class TreemapCanvas: NSView {
             return
         }
 
-        let children = sortedChildren(of: node)
+        let children = sortedChildren(of: node, nodes: nodes)
         let total = children
             .map { max(Double(nodes[$0]?.sizeBytes ?? 1), 1.0) }
             .reduce(0, +)
@@ -193,7 +239,7 @@ final class TreemapCanvas: NSView {
             }
             cursor += extent
 
-            if childRect.width * childRect.height < 9 {
+            if childRect.width * childRect.height < minRectArea {
                 continue
             }
 
@@ -207,13 +253,14 @@ final class TreemapCanvas: NSView {
                     rect: childRect.insetBy(dx: 1, dy: 1),
                     depth: depth + 1,
                     maxDepth: maxDepth,
+                    nodes: nodes,
                     out: &out
                 )
             }
         }
     }
 
-    private func sortedChildren(of node: NativeNode) -> [UInt64] {
+    private func sortedChildren(of node: NativeNode, nodes: [UInt64: NativeNode]) -> [UInt64] {
         node.children.sorted { left, right in
             let leftSize = nodes[left]?.sizeBytes ?? 0
             let rightSize = nodes[right]?.sizeBytes ?? 0
