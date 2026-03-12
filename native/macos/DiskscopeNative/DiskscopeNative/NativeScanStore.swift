@@ -235,6 +235,14 @@ final class NativeScanStore: ObservableObject {
         return Double(scanned) / Double(progress.targetBytes)
     }
 
+    var exploredFraction: Double {
+        guard progress.targetBytes > 0 else {
+            return progress.bytesSeen > 0 ? 1.0 : 0.0
+        }
+        let scanned = min(progress.bytesSeen, progress.targetBytes)
+        return Double(scanned) / Double(progress.targetBytes)
+    }
+
     func startScan() {
         teardownSession(cancel: true, synchronous: true)
 

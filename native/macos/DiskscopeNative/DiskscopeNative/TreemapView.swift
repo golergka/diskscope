@@ -12,6 +12,7 @@ struct TreemapView: NSViewRepresentable {
     let rootId: UInt64
     let selectedId: UInt64
     let version: UInt64
+    let exploredFraction: Double
     let onSelect: (UInt64) -> Void
     let onZoom: (UInt64) -> Void
 
@@ -19,14 +20,26 @@ struct TreemapView: NSViewRepresentable {
         let view = TreemapCanvas()
         view.onSelect = onSelect
         view.onZoom = onZoom
-        view.update(store: store, rootId: rootId, selectedId: selectedId, version: version)
+        view.update(
+            store: store,
+            rootId: rootId,
+            selectedId: selectedId,
+            version: version,
+            exploredFraction: exploredFraction
+        )
         return view
     }
 
     func updateNSView(_ nsView: TreemapCanvas, context: Context) {
         nsView.onSelect = onSelect
         nsView.onZoom = onZoom
-        nsView.update(store: store, rootId: rootId, selectedId: selectedId, version: version)
+        nsView.update(
+            store: store,
+            rootId: rootId,
+            selectedId: selectedId,
+            version: version,
+            exploredFraction: exploredFraction
+        )
     }
 }
 
@@ -35,6 +48,7 @@ final class TreemapCanvas: NSView {
     private var rootId: UInt64 = 0
     private var selectedId: UInt64 = 0
     private var modelVersion: UInt64 = 0
+    private var exploredFraction: Double = 0
     private var rects: [TreemapRect] = []
     private var layoutScheduled = false
     private var layoutDirty = false
@@ -52,11 +66,22 @@ final class TreemapCanvas: NSView {
         true
     }
 
-    func update(store: NativeScanStore, rootId: UInt64, selectedId: UInt64, version: UInt64) {
-        let layoutInputsChanged = version != modelVersion || rootId != self.rootId || self.store !== store
+    func update(
+        store: NativeScanStore,
+        rootId: UInt64,
+        selectedId: UInt64,
+        version: UInt64,
+        exploredFraction: Double
+    ) {
+        let normalizedExploredFraction = max(0.0, min(1.0, exploredFraction))
+        let layoutInputsChanged = version != modelVersion
+            || rootId != self.rootId
+            || self.store !== store
+            || abs(self.exploredFraction - normalizedExploredFraction) > 0.0005
         self.store = store
         self.rootId = rootId
         modelVersion = version
+        self.exploredFraction = normalizedExploredFraction
         self.selectedId = selectedId
         if layoutInputsChanged {
             scheduleLayout()
@@ -180,15 +205,38 @@ final class TreemapCanvas: NSView {
 
         var output: [TreemapRect] = []
         let inset = bounds.insetBy(dx: 2, dy: 2)
+        let exploredBounds = exploredRect(in: inset, fraction: exploredFraction)
+        guard exploredBounds.width > 2, exploredBounds.height > 2 else {
+            rects = []
+            return
+        }
         layoutChildren(
             nodeId: rootId,
-            rect: inset,
+            rect: exploredBounds,
             depth: 0,
             maxDepth: maxDepth,
             nodes: nodes,
             out: &output
         )
         rects = output
+    }
+
+    private func exploredRect(in bounds: CGRect, fraction: Double) -> CGRect {
+        let clamped = max(0.0, min(1.0, fraction))
+        if clamped <= 0.0 {
+            return CGRect(x: bounds.minX, y: bounds.minY, width: 0, height: 0)
+        }
+        if clamped >= 1.0 {
+            return bounds
+        }
+
+        let sideScale = CGFloat(sqrt(clamped))
+        return CGRect(
+            x: bounds.minX,
+            y: bounds.minY,
+            width: bounds.width * sideScale,
+            height: bounds.height * sideScale
+        )
     }
 
     private func layoutChildren(

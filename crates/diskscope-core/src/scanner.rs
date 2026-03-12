@@ -1,6 +1,6 @@
 use crate::events::{Patch, ProgressStats, RealtimeScanRequest, ScanError, ScanEvent, ScanProfile};
 use crate::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel, SizeState};
-use crate::volume::{collapse_threshold_bytes, volume_size_bytes};
+use crate::volume::{collapse_threshold_bytes, volume_size_bytes, volume_stats};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::cmp::Ordering;
@@ -396,12 +396,16 @@ fn run_realtime_scan(
     event_tx: Sender<ScanEvent>,
 ) {
     let started_at = Instant::now();
+    let root_volume_stats = volume_stats(&request.root).ok();
+    let root_volume_size_bytes = root_volume_stats
+        .map(|stats| stats.total_bytes)
+        .unwrap_or_else(|| volume_size_bytes(&request.root).unwrap_or(0));
+    let root_occupied_bytes = root_volume_stats
+        .map(|stats| stats.occupied_bytes)
+        .unwrap_or(root_volume_size_bytes);
     let threshold_bytes = match request.tuning.threshold_override {
         Some(override_threshold) => override_threshold,
-        None => {
-            let volume_size = volume_size_bytes(&request.root).unwrap_or(0);
-            collapse_threshold_bytes(volume_size)
-        }
+        None => collapse_threshold_bytes(root_volume_size_bytes),
     };
 
     let ignore_matcher = match build_live_ignore_matcher(&request.ignore_patterns) {
@@ -502,7 +506,7 @@ fn run_realtime_scan(
     let mut pending_subtrees = 0_usize;
     let mut pending_patches = Vec::<Patch>::new();
     let mut progress = ProgressStats::default();
-    progress.target_bytes = volume_size_bytes(&request.root).unwrap_or(0);
+    progress.target_bytes = root_occupied_bytes;
     let mut active_workers = 0_usize;
 
     let root_entries = match fs::read_dir(&request.root) {

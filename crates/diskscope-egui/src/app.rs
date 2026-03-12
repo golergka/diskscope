@@ -4,7 +4,7 @@ use crossbeam_channel::Receiver;
 use diskscope_core::events::{ProgressStats, RealtimeScanRequest, ScanEvent, ScanProfile};
 use diskscope_core::model::{ChildrenState, NodeKind, SizeState};
 use diskscope_core::scanner::{self, ScanHandle};
-use diskscope_core::volume::volume_size_bytes;
+use diskscope_core::volume::volume_stats;
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -59,6 +59,7 @@ pub struct DiskscopeApp {
     layout_dirty: bool,
     layout_zoom_root: u64,
     layout_rect: Option<egui::Rect>,
+    layout_explored_fraction: f32,
     expanded_nodes: HashSet<u64>,
     show_secondary_views: bool,
 }
@@ -94,6 +95,7 @@ impl Default for DiskscopeApp {
             layout_dirty: true,
             layout_zoom_root: 0,
             layout_rect: None,
+            layout_explored_fraction: 0.0,
             expanded_nodes: HashSet::from([0]),
             show_secondary_views: false,
         }
@@ -195,6 +197,34 @@ impl DiskscopeApp {
             .get(self.selected_drive_idx)
             .cloned()
             .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    fn explored_fraction(&self) -> f32 {
+        if self.progress.target_bytes == 0 {
+            return if self.progress.bytes_seen > 0 {
+                1.0
+            } else {
+                0.0
+            };
+        }
+        let seen = self.progress.bytes_seen.min(self.progress.target_bytes);
+        (seen as f64 / self.progress.target_bytes as f64) as f32
+    }
+
+    fn explored_rect(bounds: egui::Rect, explored_fraction: f32) -> egui::Rect {
+        let clamped = explored_fraction.clamp(0.0, 1.0);
+        if clamped <= 0.0 {
+            return egui::Rect::from_min_size(bounds.min, egui::Vec2::ZERO);
+        }
+        if clamped >= 1.0 {
+            return bounds;
+        }
+
+        let side_scale = clamped.sqrt();
+        egui::Rect::from_min_size(
+            bounds.min,
+            egui::vec2(bounds.width() * side_scale, bounds.height() * side_scale),
+        )
     }
 
     fn render_hierarchy_row(
@@ -605,23 +635,14 @@ impl DiskscopeApp {
         ui.horizontal(|ui| {
             ui.label(format!("State: {}", self.status_line));
             if self.progress.target_bytes > 0 {
-                let is_completed = self.status_line == "Completed";
                 let shown_seen = self.progress.bytes_seen.min(self.progress.target_bytes);
-                let fraction = if is_completed {
-                    1.0
-                } else {
-                    (shown_seen as f64 / self.progress.target_bytes as f64) as f32
-                };
+                let fraction = (shown_seen as f64 / self.progress.target_bytes as f64) as f32;
                 let clamped = fraction.clamp(0.0, 1.0);
-                let progress_text = if is_completed {
-                    "Completed".to_owned()
-                } else {
-                    format!(
-                        "{} / {} capacity",
-                        Self::human_size(shown_seen),
-                        Self::human_size(self.progress.target_bytes),
-                    )
-                };
+                let progress_text = format!(
+                    "{} / {} occupied",
+                    Self::human_size(shown_seen),
+                    Self::human_size(self.progress.target_bytes),
+                );
                 ui.add(
                     egui::ProgressBar::new(clamped)
                         .desired_width(360.0)
@@ -668,14 +689,16 @@ impl DiskscopeApp {
             });
 
             let selected_drive = self.selected_drive_path();
-            match volume_size_bytes(&selected_drive) {
-                Ok(bytes) => ui.label(format!(
-                    "Selected drive size: {} ({})",
+            match volume_stats(&selected_drive) {
+                Ok(stats) => ui.label(format!(
+                    "Selected drive: {} (total {}, occupied {}, free {})",
                     selected_drive.display(),
-                    Self::human_size(bytes)
+                    Self::human_size(stats.total_bytes),
+                    Self::human_size(stats.occupied_bytes),
+                    Self::human_size(stats.free_bytes),
                 )),
                 Err(_) => ui.label(format!(
-                    "Selected drive size: {} (unavailable)",
+                    "Selected drive stats: {} (unavailable)",
                     selected_drive.display()
                 )),
             };
@@ -774,6 +797,8 @@ impl DiskscopeApp {
         let available = ui.available_size();
         let (response, painter) = ui.allocate_painter(available, Sense::click());
         let rect = response.rect;
+        let explored_fraction = self.explored_fraction();
+        let explored_rect = Self::explored_rect(rect, explored_fraction);
 
         if rect.width() < 8.0 || rect.height() < 8.0 {
             painter.text(
@@ -789,16 +814,26 @@ impl DiskscopeApp {
         let should_recompute = self.layout_dirty
             || self.layout_zoom_root != ui_state.zoom_root_id
             || self.layout_rect != Some(rect)
+            || (self.layout_explored_fraction - explored_fraction).abs() > 0.0005
             || (self.layout_items.is_empty()
                 && ui_state
                     .node(ui_state.zoom_root_id)
                     .map(|node| !node.children.is_empty())
                     .unwrap_or(false));
         if should_recompute {
-            self.layout_items =
-                treemap::compute_treemap(&ui_state.model, ui_state.zoom_root_id, rect, 10);
+            if explored_rect.width() > 2.0 && explored_rect.height() > 2.0 {
+                self.layout_items = treemap::compute_treemap(
+                    &ui_state.model,
+                    ui_state.zoom_root_id,
+                    explored_rect,
+                    10,
+                );
+            } else {
+                self.layout_items.clear();
+            }
             self.layout_zoom_root = ui_state.zoom_root_id;
             self.layout_rect = Some(rect);
+            self.layout_explored_fraction = explored_fraction;
             self.layout_dirty = false;
         }
 

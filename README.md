@@ -114,6 +114,7 @@ Implemented in shared scan core:
 - threshold-based collapsed nodes (`max(0.1% volume, 64 MiB)` default).
 - ignore patterns, hidden/symlink/xdev controls.
 - binary snapshot output and JSON tree output for tooling.
+- progress target based on occupied bytes (`total - free`) instead of raw volume capacity.
 
 Native macOS frontend currently includes:
 
@@ -122,6 +123,7 @@ Native macOS frontend currently includes:
 - real-time progress from core events.
 - collapsible size-sorted hierarchy tree.
 - AppKit treemap with area proportional to bytes.
+- treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - tree/treemap selection + zoom sync by stable node ID.
 
 Known limitations:

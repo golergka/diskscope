@@ -159,6 +159,7 @@ struct ContentView: View {
                 rootId: store.zoomNodeId,
                 selectedId: store.selectedNodeId,
                 version: store.modelVersion,
+                exploredFraction: store.exploredFraction,
                 onSelect: { nodeId in
                     store.select(nodeId: nodeId)
                 },
