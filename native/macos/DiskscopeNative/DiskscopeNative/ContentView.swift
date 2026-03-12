@@ -107,14 +107,25 @@ struct ContentView: View {
                 Text("Hierarchy")
                     .font(.headline)
                 Spacer()
-                Button("Up") {
-                    store.zoomToParent()
+                if store.zoomNodeId != store.rootNodeId {
+                    HStack(spacing: 6) {
+                        Button {
+                            store.zoomToParent()
+                        } label: {
+                            Image(systemName: "arrow.up.to.line")
+                        }
+                        .help("Go up one level")
+
+                        Button {
+                            store.resetZoom()
+                        } label: {
+                            Image(systemName: "house")
+                        }
+                        .help("Return to scan root")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .disabled(store.zoomNodeId == store.rootNodeId)
-                Button("Root") {
-                    store.resetZoom()
-                }
-                .disabled(store.zoomNodeId == store.rootNodeId)
             }
 
             Text(store.path(for: store.selectedNodeId))
@@ -315,7 +326,14 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 return nil
             }
 
-            let identifier = NSUserInterfaceItemIdentifier("HierarchyCell")
+            if tableColumn?.identifier.rawValue == "HierarchySizeColumn" {
+                return sizeCell(outlineView: outlineView, node: node)
+            }
+            return nameCell(outlineView: outlineView, node: node)
+        }
+
+        private func nameCell(outlineView: NSOutlineView, node: NativeNode) -> NSTableCellView {
+            let identifier = NSUserInterfaceItemIdentifier("HierarchyNameCell")
             let cell: NSTableCellView
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
@@ -330,6 +348,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 let label = NSTextField(labelWithString: "")
                 label.translatesAutoresizingMaskIntoConstraints = false
                 label.lineBreakMode = .byTruncatingTail
+                label.font = NSFont.systemFont(ofSize: 15)
 
                 cell.addSubview(iconView)
                 cell.addSubview(label)
@@ -348,16 +367,63 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 ])
             }
 
-            let badge = parent.store.nodeBadge(node)
-            var label = parent.store.nodeLabel(node)
-            if !badge.isEmpty {
-                label += " [\(badge)]"
-            }
-
-            cell.textField?.stringValue = label
+            cell.textField?.stringValue = parent.store.nodeLabel(node)
             cell.textField?.textColor = .labelColor
             cell.imageView?.image = icon(for: node)
             return cell
+        }
+
+        private func sizeCell(outlineView: NSOutlineView, node: NativeNode) -> NSTableCellView {
+            let identifier = NSUserInterfaceItemIdentifier("HierarchySizeCell")
+            let cell: NSTableCellView
+            if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
+                cell = reused
+            } else {
+                cell = NSTableCellView(frame: .zero)
+                cell.identifier = identifier
+
+                let label = NSTextField(labelWithString: "")
+                label.translatesAutoresizingMaskIntoConstraints = false
+                label.alignment = .right
+                label.lineBreakMode = .byTruncatingHead
+                label.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+
+                cell.addSubview(label)
+                cell.textField = label
+
+                NSLayoutConstraint.activate([
+                    label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                    label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                    label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+                ])
+            }
+
+            cell.textField?.attributedStringValue = sizeAttributedText(for: node)
+            return cell
+        }
+
+        private func sizeAttributedText(for node: NativeNode) -> NSAttributedString {
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
+            ]
+
+            let output = NSMutableAttributedString(
+                string: parent.store.nodeSizeLabel(node),
+                attributes: baseAttributes
+            )
+
+            let badge = parent.store.nodeBadge(node)
+            if !badge.isEmpty {
+                let badgeColor: NSColor = node.errorFlag ? .systemRed : .systemOrange
+                let badgeAttributes: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: badgeColor,
+                    .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold)
+                ]
+                output.append(NSAttributedString(string: "  \(badge)", attributes: badgeAttributes))
+            }
+
+            return output
         }
 
         func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -417,7 +483,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             case .directory:
                 key = "folder.fill"
             case .collapsedDirectory:
-                key = "folder.badge.questionmark"
+                key = "folder.fill"
             case .file:
                 key = "doc.fill"
             }
@@ -437,7 +503,8 @@ private struct HierarchyOutlineView: NSViewRepresentable {
 private final class HierarchyOutlineContainerView: NSView {
     private let scrollView = NSScrollView()
     private let outlineView = NSOutlineView()
-    private let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchyColumn"))
+    private let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchyNameColumn"))
+    private let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchySizeColumn"))
 
     private weak var coordinator: HierarchyOutlineView.Coordinator?
     private weak var store: NativeScanStore?
@@ -498,7 +565,7 @@ private final class HierarchyOutlineContainerView: NSView {
         scrollView.backgroundColor = .controlBackgroundColor
         scrollView.drawsBackground = true
 
-        outlineView.headerView = nil
+        outlineView.headerView = NSTableHeaderView()
         outlineView.style = .sourceList
         outlineView.rowSizeStyle = .default
         outlineView.floatsGroupRows = false
@@ -507,12 +574,22 @@ private final class HierarchyOutlineContainerView: NSView {
         outlineView.allowsTypeSelect = true
         outlineView.allowsMultipleSelection = false
         outlineView.rowHeight = 22
-        outlineView.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        outlineView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
 
-        column.title = "Hierarchy"
-        column.resizingMask = .autoresizingMask
-        outlineView.addTableColumn(column)
-        outlineView.outlineTableColumn = column
+        nameColumn.title = "Name"
+        nameColumn.minWidth = 180
+        nameColumn.width = 290
+        nameColumn.resizingMask = .autoresizingMask
+
+        sizeColumn.title = "Size"
+        sizeColumn.minWidth = 130
+        sizeColumn.maxWidth = 220
+        sizeColumn.width = 160
+        sizeColumn.resizingMask = .autoresizingMask
+
+        outlineView.addTableColumn(nameColumn)
+        outlineView.addTableColumn(sizeColumn)
+        outlineView.outlineTableColumn = nameColumn
 
         scrollView.documentView = outlineView
         addSubview(scrollView)

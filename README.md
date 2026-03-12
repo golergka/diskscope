@@ -121,7 +121,7 @@ Native macOS frontend currently includes:
 - drive selection and optional custom path.
 - start/cancel/rescan and profile/tuning controls.
 - real-time progress from core events.
-- native `NSOutlineView` hierarchy tree (collapsible, keyboard-navigable).
+- native `NSOutlineView` hierarchy tree (collapsible, keyboard-navigable) with `Name` and `Size` columns.
 - AppKit treemap with area proportional to bytes.
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).

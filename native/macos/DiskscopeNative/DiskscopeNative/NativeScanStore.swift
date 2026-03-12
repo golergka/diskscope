@@ -392,31 +392,32 @@ final class NativeScanStore: ObservableObject {
     }
 
     func nodeBadge(_ node: NativeNode) -> String {
-        if node.childrenState == .collapsedByThreshold {
-            return "deferred"
-        }
         if node.errorFlag {
-            return "error"
+            return "Error"
+        }
+        if node.childrenState == .collapsedByThreshold {
+            return "Deferred"
         }
         return ""
     }
 
     func nodeLabel(_ node: NativeNode) -> String {
-        let sizeText: String
+        node.name
+    }
+
+    func nodeSizeLabel(_ node: NativeNode) -> String {
         switch node.sizeState {
         case .unknown:
-            sizeText = "unknown"
+            return "Scanning..."
         case .partial:
             if node.sizeBytes == 0 {
-                sizeText = "estimating..."
+                return "Scanning..."
             } else {
-                sizeText = "\(NativeScanStore.humanBytes(node.sizeBytes)) (partial)"
+                return "\(NativeScanStore.humanBytes(node.sizeBytes)) ~"
             }
         case .final:
-            sizeText = NativeScanStore.humanBytes(node.sizeBytes)
+            return NativeScanStore.humanBytes(node.sizeBytes)
         }
-
-        return "\(node.name) (\(sizeText))"
     }
 
     func receive(event: DsScanEvent) {
