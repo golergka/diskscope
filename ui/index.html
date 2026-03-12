@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diskscope Treemap</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@300;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true"></div>
+    <main class="app-shell">
+      <header class="hero panel">
+        <div>
+          <p class="eyebrow">Diskscope UI Prototype</p>
+          <h1>Treemap Explorer</h1>
+          <p class="subtitle">Load a binary snapshot from <code>diskscope --snapshot</code> and drill into space usage.</p>
+        </div>
+        <div class="controls">
+          <label class="file-picker">
+            <input id="json-file" type="file" accept=".bin,.dscope,.snapshot,.json,application/octet-stream,application/json" />
+            <span>Load Snapshot</span>
+          </label>
+          <button id="zoom-out" type="button" disabled>Zoom Out</button>
+          <button id="reset-view" type="button" disabled>Reset View</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="panel treemap-panel">
+          <div id="treemap" class="treemap" role="img" aria-label="Directory size treemap"></div>
+          <div id="empty-state" class="empty-state">
+            <h2>Waiting for scan data</h2>
+            <p>Run the scanner and load output:</p>
+            <pre><code>./target/release/diskscope /path --snapshot /tmp/scan.bin</code></pre>
+          </div>
+        </section>
+
+        <aside class="panel side-panel">
+          <section>
+            <h2>Scan</h2>
+            <dl id="scan-metrics" class="metrics"></dl>
+          </section>
+          <section>
+            <h2>Selection</h2>
+            <dl id="selection-metrics" class="metrics"></dl>
+          </section>
+          <section>
+            <h2>Errors</h2>
+            <p id="error-summary" class="mono muted">No data loaded.</p>
+            <ul id="error-list" class="error-list"></ul>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>
