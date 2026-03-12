@@ -336,6 +336,14 @@ final class NativeScanStore: ObservableObject {
         }
     }
 
+    func setExpanded(nodeId: UInt64, expanded: Bool) {
+        if expanded {
+            expandedNodes.insert(nodeId)
+        } else {
+            expandedNodes.remove(nodeId)
+        }
+    }
+
     func node(_ nodeId: UInt64) -> NativeNode? {
         nodes[nodeId]
     }
@@ -394,16 +402,6 @@ final class NativeScanStore: ObservableObject {
     }
 
     func nodeLabel(_ node: NativeNode) -> String {
-        let marker: String
-        switch node.kind {
-        case .directory:
-            marker = "D"
-        case .file:
-            marker = "F"
-        case .collapsedDirectory:
-            marker = "C"
-        }
-
         let sizeText: String
         switch node.sizeState {
         case .unknown:
@@ -418,7 +416,7 @@ final class NativeScanStore: ObservableObject {
             sizeText = NativeScanStore.humanBytes(node.sizeBytes)
         }
 
-        return "[\(marker)] \(node.name) (\(sizeText))"
+        return "\(node.name) (\(sizeText))"
     }
 
     func receive(event: DsScanEvent) {
