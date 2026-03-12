@@ -102,13 +102,31 @@ struct ContentView: View {
 
     private var hierarchyPane: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Hierarchy")
-                .font(.headline)
+            HStack {
+                Text("Hierarchy")
+                    .font(.headline)
+                Spacer()
+                Button("Up") {
+                    store.zoomToParent()
+                }
+                .disabled(store.zoomNodeId == store.rootNodeId)
+                Button("Root") {
+                    store.resetZoom()
+                }
+                .disabled(store.zoomNodeId == store.rootNodeId)
+            }
 
             Text(store.path(for: store.selectedNodeId))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+
+            if store.zoomNodeId != store.rootNodeId {
+                Text("Zoom root: \(store.path(for: store.zoomNodeId))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
 
             Divider()
 

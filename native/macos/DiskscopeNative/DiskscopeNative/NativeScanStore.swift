@@ -290,6 +290,21 @@ final class NativeScanStore: ObservableObject {
         zoomNodeId = rootNodeId
     }
 
+    func zoomToParent() {
+        guard zoomNodeId != rootNodeId else {
+            return
+        }
+        guard let parentId = nodes[zoomNodeId]?.parentId else {
+            zoomNodeId = rootNodeId
+            selectedNodeId = rootNodeId
+            return
+        }
+
+        zoomNodeId = parentId
+        selectedNodeId = parentId
+        expandedNodes.insert(parentId)
+    }
+
     func select(nodeId: UInt64) {
         guard nodes[nodeId] != nil else {
             return
