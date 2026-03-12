@@ -7,6 +7,18 @@ private struct TreemapRect {
     let depth: Int
 }
 
+private struct EdgeKey: Hashable {
+    let axis: UInt8 // 0 = horizontal, 1 = vertical
+    let major: Int32
+    let start: Int32
+    let end: Int32
+}
+
+private struct EdgeSegment {
+    let from: CGPoint
+    let to: CGPoint
+}
+
 struct TreemapView: NSViewRepresentable {
     let store: NativeScanStore
     let rootId: UInt64
@@ -49,7 +61,11 @@ final class TreemapCanvas: NSView {
     private var selectedId: UInt64 = 0
     private var modelVersion: UInt64 = 0
     private var exploredFraction: Double = 0
+    private var exploredBounds: CGRect = .zero
     private var rects: [TreemapRect] = []
+    private var sharedBorderSegments: [EdgeSegment] = []
+    private var edgeKeysByNode: [UInt64: [EdgeKey]] = [:]
+    private var exploredEdgeKeys: [EdgeKey] = []
     private var layoutScheduled = false
     private var layoutDirty = false
     private var lastLayoutAt: CFAbsoluteTime = 0
@@ -98,8 +114,7 @@ final class TreemapCanvas: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        NSColor.windowBackgroundColor.setFill()
-        bounds.fill()
+        drawBackground()
 
         guard !rects.isEmpty else {
             let attrs: [NSAttributedString.Key: Any] = [
@@ -122,11 +137,7 @@ final class TreemapCanvas: NSView {
             fill.setFill()
             item.rect.fill()
 
-            let borderColor: NSColor = item.nodeId == selectedId ? NSColor.controlAccentColor : NSColor.separatorColor
-            borderColor.setStroke()
-            let border = NSBezierPath(rect: item.rect.insetBy(dx: 0.5, dy: 0.5))
-            border.lineWidth = item.nodeId == selectedId ? 2.0 : 1.0
-            border.stroke()
+            drawGlossOverlay(in: item.rect, node: node, depth: item.depth, darkMode: darkMode)
 
             if item.rect.width > 70 && item.rect.height > 24 {
                 let textColor = textColor(for: fill, darkMode: darkMode)
@@ -140,6 +151,8 @@ final class TreemapCanvas: NSView {
                 )
             }
         }
+
+        drawSharedBorders(darkMode: darkMode)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -195,30 +208,43 @@ final class TreemapCanvas: NSView {
     private func recomputeLayout() {
         guard bounds.width > 4, bounds.height > 4 else {
             rects = []
+            sharedBorderSegments = []
+            edgeKeysByNode = [:]
+            exploredEdgeKeys = []
+            exploredBounds = .zero
             return
         }
         guard let store else {
             rects = []
+            sharedBorderSegments = []
+            edgeKeysByNode = [:]
+            exploredEdgeKeys = []
+            exploredBounds = .zero
             return
         }
         let nodes = store.nodes
 
         var output: [TreemapRect] = []
         let inset = bounds.insetBy(dx: 2, dy: 2)
-        let exploredBounds = exploredRect(in: inset, fraction: exploredFraction)
-        guard exploredBounds.width > 2, exploredBounds.height > 2 else {
+        let computedExploredBounds = exploredRect(in: inset, fraction: exploredFraction)
+        exploredBounds = computedExploredBounds
+        guard computedExploredBounds.width > 2, computedExploredBounds.height > 2 else {
             rects = []
+            sharedBorderSegments = []
+            edgeKeysByNode = [:]
+            exploredEdgeKeys = []
             return
         }
         layoutChildren(
             nodeId: rootId,
-            rect: exploredBounds,
+            rect: computedExploredBounds,
             depth: 0,
             maxDepth: maxDepth,
             nodes: nodes,
             out: &output
         )
         rects = output
+        rebuildSharedBorders()
     }
 
     private func exploredRect(in bounds: CGRect, fraction: Double) -> CGRect {
@@ -298,7 +324,7 @@ final class TreemapCanvas: NSView {
                childNode.childrenState != .collapsedByThreshold {
                 layoutChildren(
                     nodeId: childId,
-                    rect: childRect.insetBy(dx: 1, dy: 1),
+                    rect: childRect,
                     depth: depth + 1,
                     maxDepth: maxDepth,
                     nodes: nodes,
@@ -319,27 +345,202 @@ final class TreemapCanvas: NSView {
         }
     }
 
+    private func drawBackground() {
+        let top = NSColor.windowBackgroundColor.blended(withFraction: 0.20, of: .controlBackgroundColor)
+            ?? NSColor.windowBackgroundColor
+        let bottom = NSColor.windowBackgroundColor
+        if let gradient = NSGradient(starting: top, ending: bottom) {
+            gradient.draw(in: bounds, angle: 90)
+        } else {
+            NSColor.windowBackgroundColor.setFill()
+            bounds.fill()
+        }
+    }
+
+    private func drawGlossOverlay(in rect: CGRect, node: NativeNode, depth: Int, darkMode: Bool) {
+        let area = rect.width * rect.height
+        if area < 220 || rect.width < 12 || rect.height < 12 {
+            return
+        }
+
+        let depthFactor = min(CGFloat(depth), 8) / 8
+        let highlightAlphaBase: CGFloat = darkMode ? 0.20 : 0.26
+        let shadeAlphaBase: CGFloat = darkMode ? 0.24 : 0.14
+        let highlightAlpha = max(0.06, highlightAlphaBase * (1.0 - depthFactor * 0.45))
+        let shadeAlpha = min(0.28, shadeAlphaBase * (1.0 + depthFactor * 0.25))
+
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+
+        if let topGloss = NSGradient(colors: [
+            NSColor.white.withAlphaComponent(highlightAlpha),
+            NSColor.white.withAlphaComponent(highlightAlpha * 0.35),
+            NSColor.white.withAlphaComponent(0.0)
+        ]) {
+            topGloss.draw(in: rect, angle: 90)
+        }
+
+        if let diagonalShade = NSGradient(colors: [
+            NSColor.clear,
+            NSColor.black.withAlphaComponent(shadeAlpha * 0.30),
+            NSColor.black.withAlphaComponent(shadeAlpha)
+        ]) {
+            diagonalShade.draw(in: rect, angle: -38)
+        }
+
+        if node.kind == .directory || node.kind == .collapsedDirectory {
+            let bandHeight = min(rect.height * 0.28, 26)
+            let bandRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: bandHeight)
+            if let band = NSGradient(colors: [
+                NSColor.white.withAlphaComponent(darkMode ? 0.09 : 0.12),
+                NSColor.white.withAlphaComponent(0.0)
+            ]) {
+                band.draw(in: bandRect, angle: 90)
+            }
+        }
+
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func rebuildSharedBorders() {
+        edgeKeysByNode.removeAll(keepingCapacity: true)
+        exploredEdgeKeys = edgeKeys(for: exploredBounds)
+
+        var unique = Set<EdgeKey>()
+        unique.formUnion(exploredEdgeKeys)
+
+        for item in rects {
+            let keys = edgeKeys(for: item.rect)
+            edgeKeysByNode[item.nodeId] = keys
+            unique.formUnion(keys)
+        }
+
+        sharedBorderSegments = unique.map(edgeSegment(from:))
+    }
+
+    private func drawSharedBorders(darkMode: Bool) {
+        guard !sharedBorderSegments.isEmpty else {
+            return
+        }
+
+        let normalBorderColor = darkMode
+            ? NSColor.separatorColor.withAlphaComponent(0.55)
+            : NSColor.separatorColor.withAlphaComponent(0.42)
+        drawBorderSegments(sharedBorderSegments, color: normalBorderColor, lineWidth: 1.0)
+
+        var selectedKeys = Set<EdgeKey>()
+        if selectedId == rootId {
+            selectedKeys.formUnion(exploredEdgeKeys)
+        }
+        if let keys = edgeKeysByNode[selectedId] {
+            selectedKeys.formUnion(keys)
+        }
+
+        if !selectedKeys.isEmpty {
+            let selectedSegments = selectedKeys.map(edgeSegment(from:))
+            drawBorderSegments(
+                selectedSegments,
+                color: NSColor.controlAccentColor.withAlphaComponent(0.96),
+                lineWidth: 2.0
+            )
+        }
+    }
+
+    private func drawBorderSegments(_ segments: [EdgeSegment], color: NSColor, lineWidth: CGFloat) {
+        guard !segments.isEmpty else {
+            return
+        }
+        let path = NSBezierPath()
+        path.lineCapStyle = .butt
+        path.lineJoinStyle = .miter
+        path.lineWidth = lineWidth
+        for segment in segments {
+            path.move(to: segment.from)
+            path.line(to: segment.to)
+        }
+        color.setStroke()
+        path.stroke()
+    }
+
+    private func edgeKeys(for rect: CGRect) -> [EdgeKey] {
+        let minX = quantize(rect.minX)
+        let maxX = quantize(rect.maxX)
+        let minY = quantize(rect.minY)
+        let maxY = quantize(rect.maxY)
+        if minX >= maxX || minY >= maxY {
+            return []
+        }
+
+        return [
+            EdgeKey(axis: 0, major: minY, start: minX, end: maxX),
+            EdgeKey(axis: 0, major: maxY, start: minX, end: maxX),
+            EdgeKey(axis: 1, major: minX, start: minY, end: maxY),
+            EdgeKey(axis: 1, major: maxX, start: minY, end: maxY)
+        ]
+    }
+
+    private func edgeSegment(from key: EdgeKey) -> EdgeSegment {
+        if key.axis == 0 {
+            let y = dequantize(key.major)
+            return EdgeSegment(
+                from: CGPoint(x: dequantize(key.start), y: y),
+                to: CGPoint(x: dequantize(key.end), y: y)
+            )
+        }
+
+        let x = dequantize(key.major)
+        return EdgeSegment(
+            from: CGPoint(x: x, y: dequantize(key.start)),
+            to: CGPoint(x: x, y: dequantize(key.end))
+        )
+    }
+
+    private func quantize(_ value: CGFloat) -> Int32 {
+        Int32((value * 2.0).rounded())
+    }
+
+    private func dequantize(_ value: Int32) -> CGFloat {
+        CGFloat(value) / 2.0
+    }
+
     private func color(for node: NativeNode, depth: Int, darkMode: Bool) -> NSColor {
+        let palette: [NSColor] = [
+            .systemBlue,
+            .systemTeal,
+            .systemCyan,
+            .systemMint,
+            .systemGreen,
+            .systemYellow,
+            .systemOrange,
+            .systemRed,
+            .systemPink,
+            .systemPurple,
+            .systemIndigo
+        ]
+
         switch node.kind {
         case .file:
             let ext = fileExtension(for: node.name)
-            let hue = CGFloat(stableHash(ext) % 360) / 360.0
-            let saturation: CGFloat = darkMode ? 0.78 : 0.68
-            let brightness: CGFloat = darkMode ? 0.86 : 0.72
-            return NSColor(calibratedHue: hue, saturation: saturation, brightness: brightness, alpha: 0.95)
+            let base = palette[Int(stableHash(ext) % UInt64(palette.count))]
+            let softened = darkMode
+                ? (base.blended(withFraction: 0.15, of: NSColor.white) ?? base)
+                : (base.blended(withFraction: 0.14, of: NSColor.black) ?? base)
+            return softened.withAlphaComponent(0.96)
 
         case .directory:
-            let hue = CGFloat(stableHash(node.name) % 360) / 360.0
-            let saturation: CGFloat = darkMode ? 0.12 : 0.10
-            let brightness: CGFloat = darkMode
-                ? min(0.43, 0.30 + CGFloat(depth) * 0.015)
-                : max(0.78, 0.93 - CGFloat(depth) * 0.015)
-            return NSColor(calibratedHue: hue, saturation: saturation, brightness: brightness, alpha: 0.95)
+            let neutral = darkMode
+                ? NSColor(calibratedWhite: min(0.42, 0.25 + CGFloat(depth) * 0.02), alpha: 1.0)
+                : NSColor(calibratedWhite: max(0.72, 0.92 - CGFloat(depth) * 0.02), alpha: 1.0)
+            let tint = palette[Int(stableHash(node.name) % UInt64(palette.count))]
+            let mixed = neutral.blended(withFraction: darkMode ? 0.18 : 0.14, of: tint) ?? neutral
+            return mixed.withAlphaComponent(0.95)
 
         case .collapsedDirectory:
-            return darkMode
-                ? NSColor(calibratedRed: 0.56, green: 0.46, blue: 0.22, alpha: 0.96)
-                : NSColor(calibratedRed: 0.84, green: 0.72, blue: 0.44, alpha: 0.96)
+            let collapsedBase = NSColor.systemOrange
+            let mixed = darkMode
+                ? (collapsedBase.blended(withFraction: 0.28, of: NSColor.black) ?? collapsedBase)
+                : (collapsedBase.blended(withFraction: 0.20, of: NSColor.white) ?? collapsedBase)
+            return mixed.withAlphaComponent(0.96)
         }
     }
 

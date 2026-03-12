@@ -124,6 +124,7 @@ Native macOS frontend currently includes:
 - native `NSOutlineView` hierarchy tree (collapsible, keyboard-navigable).
 - AppKit treemap with area proportional to bytes.
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
+- treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.
 
 Known limitations:
