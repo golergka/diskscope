@@ -237,25 +237,21 @@ private struct HierarchyOutlineView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+        private struct ChildCacheEntry {
+            let revision: UInt64
+            let count: Int
+            let children: [UInt64]
+        }
+
         var parent: HierarchyOutlineView
-        private var cachedVersion: UInt64 = UInt64.max
-        private var childrenCache: [UInt64: [UInt64]] = [:]
+        private var childrenCache: [UInt64: ChildCacheEntry] = [:]
         private var iconCache: [String: NSImage] = [:]
 
         init(parent: HierarchyOutlineView) {
             self.parent = parent
         }
 
-        private func resetCacheIfNeeded(for version: UInt64) {
-            guard cachedVersion != version else {
-                return
-            }
-            cachedVersion = version
-            childrenCache.removeAll(keepingCapacity: true)
-        }
-
         func resetAllCaches() {
-            cachedVersion = UInt64.max
             childrenCache.removeAll(keepingCapacity: false)
             iconCache.removeAll(keepingCapacity: false)
         }
@@ -271,13 +267,25 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             return number.uint64Value
         }
 
-        func children(of nodeId: UInt64, version: UInt64) -> [UInt64] {
-            resetCacheIfNeeded(for: version)
-            if let cached = childrenCache[nodeId] {
-                return cached
+        func children(of nodeId: UInt64) -> [UInt64] {
+            guard let node = parent.store.node(nodeId) else {
+                childrenCache[nodeId] = ChildCacheEntry(revision: 0, count: 0, children: [])
+                return []
             }
+
+            let revision = parent.store.childOrderRevision(of: nodeId)
+            if let cached = childrenCache[nodeId],
+               cached.revision == revision,
+               cached.count == node.children.count {
+                return cached.children
+            }
+
             let sorted = parent.store.sortedChildren(of: nodeId)
-            childrenCache[nodeId] = sorted
+            childrenCache[nodeId] = ChildCacheEntry(
+                revision: revision,
+                count: node.children.count,
+                children: sorted
+            )
             return sorted
         }
 
@@ -291,7 +299,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard let nodeId = nodeId(from: item) else {
                 return 0
             }
-            return children(of: nodeId, version: parent.version).count
+            return children(of: nodeId).count
         }
 
         func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
@@ -301,7 +309,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard let nodeId = nodeId(from: item) else {
                 return treeItem(for: parent.rootId)
             }
-            let children = children(of: nodeId, version: parent.version)
+            let children = children(of: nodeId)
             if index >= 0 && index < children.count {
                 return treeItem(for: children[index])
             }
@@ -501,6 +509,9 @@ private struct HierarchyOutlineView: NSViewRepresentable {
 }
 
 private final class HierarchyOutlineContainerView: NSView {
+    private let reloadMinIntervalSeconds: CFAbsoluteTime = 0.2
+    private let fullReloadRowLimit = 2_000
+
     private let scrollView = NSScrollView()
     private let outlineView = NSOutlineView()
     private let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchyNameColumn"))
@@ -512,6 +523,11 @@ private final class HierarchyOutlineContainerView: NSView {
     private var selectedId: UInt64 = 0
     private var version: UInt64 = 0
     private var configured = false
+    private var lastReloadAt: CFAbsoluteTime = 0
+    private var reloadScheduled = false
+    private var reloadGeneration: UInt64 = 0
+    private var lastSyncedSelectionId: UInt64 = UInt64.max
+    private var lastSyncedRootId: UInt64 = UInt64.max
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -534,6 +550,7 @@ private final class HierarchyOutlineContainerView: NSView {
     func apply(store: NativeScanStore, rootId: UInt64, selectedId: UInt64, version: UInt64) {
         self.store = store
         let rootChanged = self.rootId != rootId
+        let selectionChanged = self.selectedId != selectedId
         let versionChanged = self.version != version
         self.rootId = rootId
         self.selectedId = selectedId
@@ -544,15 +561,24 @@ private final class HierarchyOutlineContainerView: NSView {
         }
 
         if rootChanged {
+            reloadGeneration &+= 1
+            reloadScheduled = false
+            lastSyncedSelectionId = UInt64.max
+            lastSyncedRootId = UInt64.max
             coordinator.resetAllCaches()
-        }
-
-        if rootChanged || versionChanged {
             outlineView.reloadData()
             applyExpandedState(coordinator: coordinator)
+            syncSelection(coordinator: coordinator, forceRevealAncestors: true)
+            return
         }
 
-        syncSelection(coordinator: coordinator)
+        if versionChanged {
+            scheduleVersionRefresh(coordinator: coordinator)
+        }
+
+        if selectionChanged {
+            syncSelection(coordinator: coordinator, forceRevealAncestors: true)
+        }
     }
 
     private func setupViews() {
@@ -631,7 +657,7 @@ private final class HierarchyOutlineContainerView: NSView {
             return
         }
 
-        for childId in coordinator.children(of: nodeId, version: version) {
+        for childId in coordinator.children(of: nodeId) {
             guard store.expandedNodes.contains(childId),
                   let childNode = store.node(childId),
                   childNode.kind == .directory,
@@ -646,12 +672,95 @@ private final class HierarchyOutlineContainerView: NSView {
         }
     }
 
-    private func syncSelection(coordinator: HierarchyOutlineView.Coordinator) {
+    private func scheduleVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastReloadAt
+        if elapsed >= reloadMinIntervalSeconds {
+            performVersionRefresh(coordinator: coordinator)
+            return
+        }
+
+        guard !reloadScheduled else {
+            return
+        }
+        reloadScheduled = true
+        let generation = reloadGeneration
+        let delay = reloadMinIntervalSeconds - elapsed
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self, weak coordinator] in
+            guard let self else {
+                return
+            }
+            self.reloadScheduled = false
+            guard self.reloadGeneration == generation,
+                  let coordinator else {
+                return
+            }
+            self.performVersionRefresh(coordinator: coordinator)
+        }
+    }
+
+    private func performVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
+        guard configured, store?.node(rootId) != nil else {
+            return
+        }
+
+        let didFullReload = outlineView.numberOfRows <= fullReloadRowLimit
+        if didFullReload {
+            outlineView.reloadData()
+            applyExpandedState(coordinator: coordinator)
+        } else {
+            refreshVisibleRows()
+        }
+        lastReloadAt = CFAbsoluteTimeGetCurrent()
+
+        if didFullReload || !isSelectionSynchronized(coordinator: coordinator) {
+            syncSelection(coordinator: coordinator)
+        }
+    }
+
+    private func refreshVisibleRows() {
+        let rows = outlineView.rows(in: outlineView.visibleRect)
+        guard rows.length > 0 else {
+            return
+        }
+
+        let start = max(rows.location, 0)
+        let end = min(outlineView.numberOfRows, start + rows.length)
+        guard start < end else {
+            return
+        }
+
+        let columnCount = max(1, outlineView.numberOfColumns)
+        let rowIndexes = IndexSet(integersIn: start..<end)
+        let columnIndexes = IndexSet(integersIn: 0..<columnCount)
+        outlineView.reloadData(forRowIndexes: rowIndexes, columnIndexes: columnIndexes)
+    }
+
+    private func isSelectionSynchronized(coordinator: HierarchyOutlineView.Coordinator) -> Bool {
+        let expected = coordinator.treeItem(for: selectedId)
+        let row = outlineView.selectedRow
+        guard row >= 0,
+              let item = outlineView.item(atRow: row),
+              let selectedItemId = coordinator.nodeId(from: item) else {
+            return false
+        }
+        guard let expectedId = coordinator.nodeId(from: expected) else {
+            return false
+        }
+        return selectedItemId == expectedId
+    }
+
+    private func syncSelection(
+        coordinator: HierarchyOutlineView.Coordinator,
+        forceRevealAncestors: Bool = false
+    ) {
         guard configured, store != nil else {
             return
         }
 
-        revealAncestors(for: selectedId, coordinator: coordinator)
+        if forceRevealAncestors || selectedId != lastSyncedSelectionId || rootId != lastSyncedRootId {
+            revealAncestors(for: selectedId, coordinator: coordinator)
+        }
         let item = coordinator.treeItem(for: selectedId)
         let row = outlineView.row(forItem: item)
         guard row >= 0 else {
@@ -661,7 +770,22 @@ private final class HierarchyOutlineContainerView: NSView {
         if outlineView.selectedRow != row {
             outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
-        outlineView.scrollRowToVisible(row)
+
+        if !isRowVisible(row) {
+            outlineView.scrollRowToVisible(row)
+        }
+        lastSyncedSelectionId = selectedId
+        lastSyncedRootId = rootId
+    }
+
+    private func isRowVisible(_ row: Int) -> Bool {
+        let visibleRows = outlineView.rows(in: outlineView.visibleRect)
+        guard visibleRows.length > 0 else {
+            return false
+        }
+        let start = visibleRows.location
+        let end = start + visibleRows.length
+        return row >= start && row < end
     }
 
     private func revealAncestors(
@@ -683,7 +807,10 @@ private final class HierarchyOutlineContainerView: NSView {
         }
 
         for ancestorId in ancestors.reversed() {
-            outlineView.expandItem(coordinator.treeItem(for: ancestorId))
+            let ancestorItem = coordinator.treeItem(for: ancestorId)
+            if !outlineView.isItemExpanded(ancestorItem) {
+                outlineView.expandItem(ancestorItem)
+            }
         }
     }
 }

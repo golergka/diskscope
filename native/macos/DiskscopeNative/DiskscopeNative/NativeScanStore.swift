@@ -178,6 +178,7 @@ final class NativeScanStore: ObservableObject {
     @Published var zoomNodeId: UInt64 = 0
     @Published var expandedNodes: Set<UInt64> = [0]
     @Published var modelVersion: UInt64 = 0
+    private var childOrderRevisions: [UInt64: UInt64] = [:]
 
     private var session: DsSessionHandleRef?
     private var pendingPatches: [IncomingPatch] = []
@@ -361,6 +362,10 @@ final class NativeScanStore: ObservableObject {
             }
             return leftSize > rightSize
         }
+    }
+
+    func childOrderRevision(of nodeId: UInt64) -> UInt64 {
+        childOrderRevisions[nodeId] ?? 0
     }
 
     func path(for nodeId: UInt64) -> String {
@@ -608,6 +613,8 @@ final class NativeScanStore: ObservableObject {
     private func apply(patch: IncomingPatch) {
         let existing = nodes[patch.id]
         let previousParent = existing?.parentId
+        let previousName = existing?.name
+        let previousSize = existing?.sizeBytes
 
         var node = existing ?? NativeNode(
             id: patch.id,
@@ -635,8 +642,12 @@ final class NativeScanStore: ObservableObject {
         nodes[patch.id] = node
 
         if let oldParent = previousParent, oldParent != patch.parentId, var parent = nodes[oldParent] {
+            let originalCount = parent.children.count
             parent.children.removeAll { $0 == patch.id }
             nodes[oldParent] = parent
+            if parent.children.count != originalCount {
+                bumpChildOrderRevision(for: oldParent)
+            }
         }
 
         if let parentId = patch.parentId {
@@ -654,10 +665,18 @@ final class NativeScanStore: ObservableObject {
                 children: []
             )
 
+            var addedToParent = false
             if existing == nil || previousParent != patch.parentId {
                 parent.children.append(patch.id)
+                addedToParent = true
             }
             nodes[parentId] = parent
+
+            if addedToParent {
+                bumpChildOrderRevision(for: parentId)
+            } else if previousName != patch.name || previousSize != patch.sizeBytes {
+                bumpChildOrderRevision(for: parentId)
+            }
         }
     }
 
@@ -671,6 +690,7 @@ final class NativeScanStore: ObservableObject {
         selectedNodeId = 0
         zoomNodeId = 0
         expandedNodes = [0]
+        childOrderRevisions = [0: 0]
         modelVersion &+= 1
 
         let rootName = NativeScanStore.displayName(path: path)
@@ -709,6 +729,10 @@ final class NativeScanStore: ObservableObject {
         } else {
             DispatchQueue.global(qos: .utility).async(execute: work)
         }
+    }
+
+    private func bumpChildOrderRevision(for nodeId: UInt64) {
+        childOrderRevisions[nodeId] = (childOrderRevisions[nodeId] ?? 0) &+ 1
     }
 
     private static func discoverDrives() -> [String] {

@@ -122,6 +122,7 @@ Native macOS frontend currently includes:
 - start/cancel/rescan and profile/tuning controls.
 - real-time progress from core events.
 - native `NSOutlineView` hierarchy tree (collapsible, keyboard-navigable) with `Name` and `Size` columns.
+- hierarchy refresh is coalesced/throttled and switches to visible-row updates for very large expanded trees.
 - AppKit treemap with area proportional to bytes.
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
