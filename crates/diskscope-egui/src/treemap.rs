@@ -1,4 +1,4 @@
-use crate::core::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel};
+use diskscope_core::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2, Visuals};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

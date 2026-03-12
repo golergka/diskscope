@@ -817,10 +817,35 @@ dependencies = [
 name = "diskscope"
 version = "0.1.0"
 dependencies = [
+ "diskscope-core",
+ "diskscope-egui",
+]
+
+[[package]]
+name = "diskscope-core"
+version = "0.1.0"
+dependencies = [
  "crossbeam-channel",
- "eframe",
  "globset",
  "libc",
+]
+
+[[package]]
+name = "diskscope-egui"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "diskscope-core",
+ "eframe",
+]
+
+[[package]]
+name = "diskscope-ffi"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "diskscope-core",
+ "tempfile",
 ]
 
 [[package]]

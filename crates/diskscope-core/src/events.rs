@@ -1,4 +1,4 @@
-use crate::core::model::NodeSnapshot;
+use crate::model::NodeSnapshot;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]

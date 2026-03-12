@@ -1,1 +1,5 @@
 /target
+**/.DS_Store
+native/macos/DiskscopeNative/build/
+native/macos/DiskscopeNative/*.xcuserdatad/
+native/macos/DiskscopeNative/*.xcworkspace/xcuserdata/

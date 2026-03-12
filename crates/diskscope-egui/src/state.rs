@@ -1,5 +1,5 @@
-use crate::core::events::Patch;
-use crate::core::model::{NodeId, NodeSnapshot, ScanModel};
+use diskscope_core::events::Patch;
+use diskscope_core::model::{NodeId, NodeSnapshot, ScanModel};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -73,8 +73,8 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::UiState;
-    use crate::core::events::Patch;
-    use crate::core::model::{ChildrenState, NodeKind, NodeSnapshot, SizeState};
+    use diskscope_core::events::Patch;
+    use diskscope_core::model::{ChildrenState, NodeKind, NodeSnapshot, SizeState};
     use std::path::PathBuf;
 
     #[test]

@@ -1,8 +1,6 @@
-use crate::core::events::{
-    Patch, ProgressStats, RealtimeScanRequest, ScanError, ScanEvent, ScanProfile,
-};
-use crate::core::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel, SizeState};
-use crate::core::volume::{collapse_threshold_bytes, volume_size_bytes};
+use crate::events::{Patch, ProgressStats, RealtimeScanRequest, ScanError, ScanEvent, ScanProfile};
+use crate::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel, SizeState};
+use crate::volume::{collapse_threshold_bytes, volume_size_bytes};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::cmp::Ordering;

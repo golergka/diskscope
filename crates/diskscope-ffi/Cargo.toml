@@ -1,0 +1,16 @@
+[package]
+name = "diskscope-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI bridge for diskscope core"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+crossbeam-channel.workspace = true
+diskscope-core = { path = "../diskscope-core" }
+
+[dev-dependencies]
+tempfile = "3"

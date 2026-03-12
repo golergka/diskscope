@@ -1,88 +1,136 @@
 # diskscope
 
-A low-memory disk scanner inspired by Disk Inventory X, implemented in Rust.
+`diskscope` is a Rust disk-usage analyzer inspired by Disk Inventory X.
 
-## What is implemented
+The project now ships as a dual-frontend system over one shared scan core:
 
-- Native desktop app (`egui`) via `diskscope ui`.
-- CLI scanner via `diskscope scan ...`.
-- Backward-compatible CLI invocation (`diskscope [PATH] [options]`) still works.
-- Real-time scan pipeline with worker threads + incremental UI patch updates.
-- Stable node IDs across updates (selection/zoom continuity).
-- Disk Inventory X-style structural treemap semantics:
-  - area proportional to byte size
-  - hierarchical grouping
-  - directories + file leaves
-- Threshold-based collapsed subtrees to bound persisted memory:
-  - default threshold = `max(0.1% of volume size, 64 MiB)`
-  - collapsed nodes are terminal in v1
-  - TODO hooks are in code for future expand-on-click
+- `diskscope scan` for CLI workflows and automation.
+- `diskscope ui` for the existing `egui` desktop frontend.
+- `diskscope ui-native` for a native macOS frontend (SwiftUI shell + AppKit treemap).
 
-## Build
+## Frontend model
+
+- Shared source of truth: `crates/diskscope-core`.
+- Scanner emits incremental patch/progress events.
+- `egui` and native macOS frontends both consume the same core semantics.
+- JSON is still available for automation/debug exports, but frontend transport is C ABI callbacks (`diskscope-ffi`), not JSON.
+
+## Workspace layout
+
+- `crates/diskscope-core`: scanner, model, events, volume logic.
+- `crates/diskscope-cli`: command dispatch (`scan`, `ui`, `ui-native`).
+- `crates/diskscope-egui`: existing native Rust UI.
+- `crates/diskscope-ffi`: C ABI bridge used by native macOS app.
+- `native/macos/DiskscopeNative`: Xcode project for native macOS frontend.
+
+## Commands
+
+### `diskscope scan`
+
+Runs the CLI scanner with current flags/output modes.
 
 ```bash
+cargo run -p diskscope -- scan / --top 30 --min-size 1G --one-file-system
+```
+
+Backward-compatible invocation still works:
+
+```bash
+cargo run -p diskscope -- / --top 30 --min-size 1G
+```
+
+### `diskscope ui`
+
+Launches `egui` frontend.
+
+```bash
+cargo run -p diskscope -- ui
+cargo run -p diskscope -- ui --path / --start
+```
+
+### `diskscope ui-native`
+
+Launches native macOS frontend app bundle.
+
+```bash
+cargo run -p diskscope -- ui-native
+cargo run -p diskscope -- ui-native --path / --start
+```
+
+If the app bundle is missing, CLI exits non-zero and prints deterministic build steps.
+
+## Native macOS setup (`ui-native`)
+
+### Prerequisites
+
+- macOS 13+
+- Xcode 16+
+- Rust stable toolchain
+
+### Build
+
+From repo root:
+
+```bash
+cargo build -p diskscope-ffi --release
+xcodebuild \
+  -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj \
+  -scheme DiskscopeNative \
+  -configuration Release \
+  -derivedDataPath native/macos/DiskscopeNative/build \
+  build
+```
+
+Expected app artifact path:
+
+- `native/macos/DiskscopeNative/build/Build/Products/Release/DiskscopeNative.app`
+
+Then launch through CLI:
+
+```bash
+cargo run -p diskscope -- ui-native --path / --start
+```
+
+Optional app override path:
+
+```bash
+DISKSCOPE_NATIVE_APP=/absolute/path/to/DiskscopeNative.app cargo run -p diskscope -- ui-native
+```
+
+## Build and test (Rust workspace)
+
+```bash
+cargo test
 cargo build --release
 ```
 
-## Native UI (no localhost)
+## Feature status (current)
 
-```bash
-./target/release/diskscope ui
-```
+Implemented in shared scan core:
 
-In the native app you get:
+- directory + file nodes with stable `NodeId` per scan session.
+- explicit `Unknown/Partial/Final` state semantics.
+- background worker scanning with incremental event streaming.
+- threshold-based collapsed nodes (`max(0.1% volume, 64 MiB)` default).
+- ignore patterns, hidden/symlink/xdev controls.
+- binary snapshot output and JSON tree output for tooling.
 
-- path input
-- Start / Cancel / Rescan
-- profile selector (Conservative / Balanced / Aggressive)
-- advanced controls (worker override, queue limit, threshold override)
-- real-time progress and incremental treemap updates
+Native macOS frontend currently includes:
 
-## CLI scanner
+- drive selection and optional custom path.
+- start/cancel/rescan and profile/tuning controls.
+- real-time progress from core events.
+- collapsible size-sorted hierarchy tree.
+- AppKit treemap with area proportional to bytes.
+- tree/treemap selection + zoom sync by stable node ID.
 
-Subcommand form:
+Known limitations:
 
-```bash
-./target/release/diskscope scan /Users/me --top 30 --min-size 1G --one-file-system
-```
+- native parity hardening is in progress (see `docs/parity-matrix.md`).
+- signing/notarization is deferred.
 
-Backward-compatible form:
+## Additional docs
 
-```bash
-./target/release/diskscope /Users/me --top 30 --min-size 1G --one-file-system
-```
-
-### Useful output formats
-
-Binary snapshot:
-
-```bash
-./target/release/diskscope scan /Users/me --snapshot /tmp/scan.bin
-```
-
-JSON tree:
-
-```bash
-./target/release/diskscope scan /Users/me --json-tree > /tmp/scan.json
-```
-
-## Help
-
-Top-level:
-
-```bash
-./target/release/diskscope --help
-```
-
-Scan options:
-
-```bash
-./target/release/diskscope scan --help
-```
-
-## Status
-
-- `cargo test`: passing
-- `cargo build --release`: passing
-
-Legacy static web prototype files still exist under `ui/`, but the primary interface is now native (`diskscope ui`).
+- `docs/native-macos.md`
+- `docs/ffi-contract.md`
+- `docs/parity-matrix.md`

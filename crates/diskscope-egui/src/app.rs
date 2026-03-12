@@ -1,10 +1,10 @@
-use crate::core::events::{ProgressStats, RealtimeScanRequest, ScanEvent, ScanProfile};
-use crate::core::model::{ChildrenState, NodeKind, SizeState};
-use crate::core::scanner::{self, ScanHandle};
-use crate::core::volume::volume_size_bytes;
-use crate::ui::state::UiState;
-use crate::ui::treemap;
+use crate::state::UiState;
+use crate::treemap;
 use crossbeam_channel::Receiver;
+use diskscope_core::events::{ProgressStats, RealtimeScanRequest, ScanEvent, ScanProfile};
+use diskscope_core::model::{ChildrenState, NodeKind, SizeState};
+use diskscope_core::scanner::{self, ScanHandle};
+use diskscope_core::volume::volume_size_bytes;
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense};
 use std::collections::HashSet;
 use std::path::PathBuf;

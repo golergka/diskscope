@@ -1,0 +1,11 @@
+[package]
+name = "diskscope-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "egui frontend for diskscope"
+
+[dependencies]
+crossbeam-channel.workspace = true
+eframe.workspace = true
+diskscope-core = { path = "../diskscope-core" }

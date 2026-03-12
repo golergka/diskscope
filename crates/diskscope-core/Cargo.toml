@@ -1,0 +1,11 @@
+[package]
+name = "diskscope-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared scan core for diskscope frontends"
+
+[dependencies]
+crossbeam-channel.workspace = true
+globset.workspace = true
+libc.workspace = true

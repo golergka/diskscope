@@ -1,0 +1,10 @@
+[package]
+name = "diskscope"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+
+[dependencies]
+diskscope-core = { path = "../diskscope-core" }
+diskscope-egui = { path = "../diskscope-egui" }
