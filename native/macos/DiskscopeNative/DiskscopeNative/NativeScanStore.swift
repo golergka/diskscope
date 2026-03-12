@@ -166,7 +166,7 @@ final class NativeScanStore: ObservableObject {
     @Published var workerOverrideText: String = ""
     @Published var queueLimitText: String = "64"
     @Published var thresholdOverrideText: String = ""
-    @Published var nodes: [UInt64: NativeNode] = [:]
+    private(set) var nodes: [UInt64: NativeNode] = [:]
     @Published var rootNodeId: UInt64 = 0
     @Published var selectedNodeId: UInt64 = 0
     @Published var zoomNodeId: UInt64 = 0
@@ -174,6 +174,9 @@ final class NativeScanStore: ObservableObject {
     @Published var modelVersion: UInt64 = 0
 
     private var session: DsSessionHandleRef?
+    private var pendingPatches: [IncomingPatch] = []
+    private var patchFlushScheduled = false
+    private let patchFlushIntervalSeconds: TimeInterval = 0.1
 
     init(launch: NativeLaunchOptions) {
         let discoveredDrives = NativeScanStore.discoverDrives()
@@ -476,38 +479,65 @@ final class NativeScanStore: ObservableObject {
     private func apply(decoded: IncomingEvent) {
         switch decoded {
         case .batch(let patches):
-            for patch in patches {
-                apply(patch: patch)
-            }
-            modelVersion &+= 1
-
-            if nodes[selectedNodeId] == nil {
-                selectedNodeId = rootNodeId
-            }
-            if nodes[zoomNodeId] == nil {
-                zoomNodeId = rootNodeId
-            }
-
-            statusLine = "Scanning... \(nodes.count) nodes"
+            pendingPatches.append(contentsOf: patches)
+            schedulePatchFlush()
 
         case .progress(let incoming):
             progress = incoming
             statusLine = "Scanning \(scannedBytesLabel) of \(targetBytesLabel)"
 
         case .completed:
+            flushPendingPatches()
             scanState = .completed
             statusLine = "Completed: \(scannedBytesLabel) scanned"
             teardownSession(cancel: false, synchronous: false)
 
         case .cancelled:
+            flushPendingPatches()
             scanState = .cancelled
             statusLine = "Cancelled"
             teardownSession(cancel: false, synchronous: false)
 
         case .error(let message):
+            flushPendingPatches()
             scanState = .failed(message)
             statusLine = message
             teardownSession(cancel: false, synchronous: false)
+        }
+    }
+
+    private func schedulePatchFlush() {
+        guard !patchFlushScheduled else {
+            return
+        }
+        patchFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + patchFlushIntervalSeconds) { [weak self] in
+            self?.flushPendingPatches()
+        }
+    }
+
+    private func flushPendingPatches() {
+        patchFlushScheduled = false
+        guard !pendingPatches.isEmpty else {
+            return
+        }
+
+        let patches = pendingPatches
+        pendingPatches.removeAll(keepingCapacity: true)
+        for patch in patches {
+            apply(patch: patch)
+        }
+        modelVersion &+= 1
+
+        if nodes[selectedNodeId] == nil {
+            selectedNodeId = rootNodeId
+        }
+        if nodes[zoomNodeId] == nil {
+            zoomNodeId = rootNodeId
+        }
+
+        if scanState == .running {
+            statusLine = "Scanning... \(nodes.count) nodes"
         }
     }
 
@@ -568,6 +598,8 @@ final class NativeScanStore: ObservableObject {
     }
 
     private func resetModel(path: String) {
+        pendingPatches.removeAll(keepingCapacity: false)
+        patchFlushScheduled = false
         progress = NativeProgress()
         rootNodeId = 0
         selectedNodeId = 0

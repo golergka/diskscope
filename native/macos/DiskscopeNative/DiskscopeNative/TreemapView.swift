@@ -45,15 +45,15 @@ final class TreemapCanvas: NSView {
     }
 
     func update(nodes: [UInt64: NativeNode], rootId: UInt64, selectedId: UInt64, version: UInt64) {
-        self.nodes = nodes
-        self.rootId = rootId
-        self.selectedId = selectedId
-
-        if version != modelVersion || bounds.size != .zero {
+        let layoutInputsChanged = version != modelVersion || rootId != self.rootId
+        if layoutInputsChanged {
+            self.nodes = nodes
+            self.rootId = rootId
             modelVersion = version
             recomputeLayout()
         }
 
+        self.selectedId = selectedId
         needsDisplay = true
     }
 
