@@ -127,11 +127,13 @@ Native macOS frontend currently includes:
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.
+- optional runtime diagnostics via `DISKSCOPE_NATIVE_TRACE=1` (logs slow patch flush, outline refresh/selection sync, treemap relayout/draw FPS to unified macOS logs).
 
 Known limitations:
 
 - native parity hardening is in progress (see `docs/parity-matrix.md`).
 - signing/notarization is deferred.
+- scanning `/` may show per-folder `Error` badges for macOS-protected paths when permission is denied (for example, if privacy prompts are declined).
 
 ## Additional docs
 

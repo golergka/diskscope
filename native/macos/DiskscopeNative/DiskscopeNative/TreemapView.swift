@@ -69,6 +69,8 @@ final class TreemapCanvas: NSView {
     private var layoutScheduled = false
     private var layoutDirty = false
     private var lastLayoutAt: CFAbsoluteTime = 0
+    private var drawSampleStartedAt: CFAbsoluteTime = 0
+    private var drawSampleCount = 0
 
     private let maxDepth = 10
     private let minRectArea: CGFloat = 9
@@ -114,6 +116,7 @@ final class TreemapCanvas: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
+        let drawStartedAt = CFAbsoluteTimeGetCurrent()
         drawBackground()
 
         guard !rects.isEmpty else {
@@ -153,6 +156,7 @@ final class TreemapCanvas: NSView {
         }
 
         drawSharedBorders(darkMode: darkMode)
+        recordDrawSample(startedAt: drawStartedAt)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -206,6 +210,7 @@ final class TreemapCanvas: NSView {
     }
 
     private func recomputeLayout() {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         guard bounds.width > 4, bounds.height > 4 else {
             rects = []
             sharedBorderSegments = []
@@ -245,6 +250,45 @@ final class TreemapCanvas: NSView {
         )
         rects = output
         rebuildSharedBorders()
+
+        let details = "rects=\(rects.count) explored=\(String(format: "%.3f", exploredFraction))"
+        NativeDiagnostics.slowPath(
+            "treemap_relayout",
+            startedAt: startedAt,
+            thresholdMs: 18,
+            details: details
+        )
+    }
+
+    private func recordDrawSample(startedAt: CFAbsoluteTime) {
+        NativeDiagnostics.slowPath(
+            "treemap_draw",
+            startedAt: startedAt,
+            thresholdMs: 12,
+            details: "rects=\(rects.count)"
+        )
+
+        guard NativeDiagnostics.enabled else {
+            return
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        if drawSampleStartedAt == 0 {
+            drawSampleStartedAt = now
+            drawSampleCount = 1
+            return
+        }
+
+        drawSampleCount += 1
+        let elapsed = now - drawSampleStartedAt
+        guard elapsed >= 2.0 else {
+            return
+        }
+
+        let fps = Double(drawSampleCount) / elapsed
+        NativeDiagnostics.debug("treemap_fps fps=\(String(format: "%.1f", fps)) rects=\(rects.count)")
+        drawSampleStartedAt = now
+        drawSampleCount = 0
     }
 
     private func exploredRect(in bounds: CGRect, fraction: Double) -> CGRect {

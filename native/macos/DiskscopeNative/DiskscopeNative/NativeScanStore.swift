@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 
 private let kEventBatch = UInt32(DS_EVENT_BATCH)
@@ -19,6 +20,59 @@ private let kChildrenUnknown = UInt8(DS_CHILDREN_STATE_UNKNOWN)
 private let kChildrenPartial = UInt8(DS_CHILDREN_STATE_PARTIAL)
 private let kChildrenFinal = UInt8(DS_CHILDREN_STATE_FINAL)
 private let kChildrenCollapsed = UInt8(DS_CHILDREN_STATE_COLLAPSED_BY_THRESHOLD)
+
+enum NativeDiagnostics {
+    private static let logger = Logger(subsystem: "com.diskscope.native", category: "runtime")
+    private static let enabledFlag = ProcessInfo.processInfo.environment["DISKSCOPE_NATIVE_TRACE"] == "1"
+
+    static var enabled: Bool {
+        enabledFlag
+    }
+
+    static func debug(_ message: String) {
+        guard enabledFlag else {
+            return
+        }
+        logger.debug("\(message, privacy: .public)")
+    }
+
+    static func info(_ message: String) {
+        guard enabledFlag else {
+            return
+        }
+        logger.info("\(message, privacy: .public)")
+    }
+
+    static func warning(_ message: String) {
+        guard enabledFlag else {
+            return
+        }
+        logger.warning("\(message, privacy: .public)")
+    }
+
+    static func slowPath(
+        _ label: String,
+        startedAt: CFAbsoluteTime,
+        thresholdMs: Double = 16,
+        details: String = ""
+    ) {
+        guard enabledFlag else {
+            return
+        }
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        guard elapsedMs >= thresholdMs else {
+            return
+        }
+        let elapsedText = String(format: "%.2f", elapsedMs)
+        if details.isEmpty {
+            logger.warning("slow \(label, privacy: .public): \(elapsedText, privacy: .public) ms")
+        } else {
+            logger.warning(
+                "slow \(label, privacy: .public): \(elapsedText, privacy: .public) ms (\(details, privacy: .public))"
+            )
+        }
+    }
+}
 
 enum NativeNodeKind: UInt8 {
     case directory = 0
@@ -249,6 +303,7 @@ final class NativeScanStore: ObservableObject {
 
         let path = activePath
         let canonical = (path as NSString).expandingTildeInPath
+        NativeDiagnostics.info("start_scan path=\(canonical)")
         resetModel(path: canonical)
         scanState = .running
         statusLine = "Starting scan for \(canonical)..."
@@ -276,10 +331,12 @@ final class NativeScanStore: ObservableObject {
         guard let handle else {
             scanState = .failed("Unable to start native scan session")
             statusLine = "Failed to start scan"
+            NativeDiagnostics.warning("scan_start_failed path=\(canonical)")
             return
         }
 
         session = handle
+        NativeDiagnostics.info("scan_session_started path=\(canonical)")
     }
 
     func cancelScan() {
@@ -288,6 +345,7 @@ final class NativeScanStore: ObservableObject {
         }
         scanState = .cancelled
         statusLine = "Cancelling scan..."
+        NativeDiagnostics.info("scan_cancel_requested")
         teardownSession(cancel: true, synchronous: false)
     }
 
@@ -296,6 +354,9 @@ final class NativeScanStore: ObservableObject {
     }
 
     func resetZoom() {
+        guard zoomNodeId != rootNodeId else {
+            return
+        }
         zoomNodeId = rootNodeId
     }
 
@@ -315,7 +376,7 @@ final class NativeScanStore: ObservableObject {
     }
 
     func select(nodeId: UInt64) {
-        guard nodes[nodeId] != nil else {
+        guard nodes[nodeId] != nil, selectedNodeId != nodeId else {
             return
         }
         selectedNodeId = nodeId
@@ -323,6 +384,9 @@ final class NativeScanStore: ObservableObject {
 
     func zoom(to nodeId: UInt64) {
         guard nodes[nodeId] != nil else {
+            return
+        }
+        if zoomNodeId == nodeId, expandedNodes.contains(nodeId) {
             return
         }
         zoomNodeId = nodeId
@@ -339,8 +403,14 @@ final class NativeScanStore: ObservableObject {
 
     func setExpanded(nodeId: UInt64, expanded: Bool) {
         if expanded {
+            if expandedNodes.contains(nodeId) {
+                return
+            }
             expandedNodes.insert(nodeId)
         } else {
+            if !expandedNodes.contains(nodeId) {
+                return
+            }
             expandedNodes.remove(nodeId)
         }
     }
@@ -524,14 +594,17 @@ final class NativeScanStore: ObservableObject {
 
         case .completed:
             pendingTerminalEvent = .completed
+            NativeDiagnostics.info("scan_completed_event")
             schedulePatchFlush()
 
         case .cancelled:
             pendingTerminalEvent = .cancelled
+            NativeDiagnostics.info("scan_cancelled_event")
             schedulePatchFlush()
 
         case .error(let message):
             pendingTerminalEvent = .error(message)
+            NativeDiagnostics.warning("scan_error_event message=\(message)")
             schedulePatchFlush()
         }
     }
@@ -553,6 +626,7 @@ final class NativeScanStore: ObservableObject {
         }
 
         let start = CFAbsoluteTimeGetCurrent()
+        let startingCursor = pendingPatchCursor
         var appliedAnyPatch = false
         while pendingPatchCursor < pendingPatches.count {
             apply(patch: pendingPatches[pendingPatchCursor])
@@ -562,6 +636,18 @@ final class NativeScanStore: ObservableObject {
             if CFAbsoluteTimeGetCurrent() - start >= patchFlushTimeBudgetSeconds {
                 break
             }
+        }
+
+        if appliedAnyPatch && NativeDiagnostics.enabled {
+            let applied = pendingPatchCursor - startingCursor
+            let pending = max(0, pendingPatches.count - pendingPatchCursor)
+            let details = "applied=\(applied) pending=\(pending) nodes=\(nodes.count)"
+            NativeDiagnostics.slowPath(
+                "patch_flush",
+                startedAt: start,
+                thresholdMs: 18,
+                details: details
+            )
         }
 
         if appliedAnyPatch {
@@ -599,12 +685,15 @@ final class NativeScanStore: ObservableObject {
         case .completed:
             scanState = .completed
             statusLine = "Completed: \(scannedBytesLabel) scanned"
+            NativeDiagnostics.info("scan_terminal completed scanned=\(progress.bytesSeen) target=\(progress.targetBytes)")
         case .cancelled:
             scanState = .cancelled
             statusLine = "Cancelled"
+            NativeDiagnostics.info("scan_terminal cancelled")
         case .error(let message):
             scanState = .failed(message)
             statusLine = message
+            NativeDiagnostics.warning("scan_terminal error=\(message)")
         }
 
         teardownSession(cancel: false, synchronous: false)

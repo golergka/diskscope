@@ -444,7 +444,12 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                   let nodeId = nodeId(from: item) else {
                 return
             }
-            parent.onSelect(nodeId)
+            guard parent.selectedId != nodeId else {
+                return
+            }
+            DispatchQueue.main.async { [parent] in
+                parent.onSelect(nodeId)
+            }
         }
 
         @objc
@@ -472,7 +477,12 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard let nodeId = nodeId(from: item) else {
                 return
             }
-            parent.onExpandedChanged(nodeId, true)
+            if parent.store.expandedNodes.contains(nodeId) {
+                return
+            }
+            DispatchQueue.main.async { [parent] in
+                parent.onExpandedChanged(nodeId, true)
+            }
         }
 
         func outlineViewItemDidCollapse(_ notification: Notification) {
@@ -482,7 +492,12 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard let nodeId = nodeId(from: item) else {
                 return
             }
-            parent.onExpandedChanged(nodeId, false)
+            if !parent.store.expandedNodes.contains(nodeId) {
+                return
+            }
+            DispatchQueue.main.async { [parent] in
+                parent.onExpandedChanged(nodeId, false)
+            }
         }
 
         private func icon(for node: NativeNode) -> NSImage {
@@ -566,6 +581,7 @@ private final class HierarchyOutlineContainerView: NSView {
             lastSyncedSelectionId = UInt64.max
             lastSyncedRootId = UInt64.max
             coordinator.resetAllCaches()
+            NativeDiagnostics.debug("outline_root_changed root=\(rootId)")
             outlineView.reloadData()
             applyExpandedState(coordinator: coordinator)
             syncSelection(coordinator: coordinator, forceRevealAncestors: true)
@@ -704,6 +720,7 @@ private final class HierarchyOutlineContainerView: NSView {
             return
         }
 
+        let refreshStartedAt = CFAbsoluteTimeGetCurrent()
         let didFullReload = outlineView.numberOfRows <= fullReloadRowLimit
         if didFullReload {
             outlineView.reloadData()
@@ -716,6 +733,15 @@ private final class HierarchyOutlineContainerView: NSView {
         if didFullReload || !isSelectionSynchronized(coordinator: coordinator) {
             syncSelection(coordinator: coordinator)
         }
+
+        let refreshMode = didFullReload ? "full" : "visible"
+        let details = "mode=\(refreshMode) rows=\(outlineView.numberOfRows) selected=\(selectedId)"
+        NativeDiagnostics.slowPath(
+            "outline_refresh",
+            startedAt: refreshStartedAt,
+            thresholdMs: 16,
+            details: details
+        )
     }
 
     private func refreshVisibleRows() {
@@ -758,6 +784,7 @@ private final class HierarchyOutlineContainerView: NSView {
             return
         }
 
+        let startedAt = CFAbsoluteTimeGetCurrent()
         if forceRevealAncestors || selectedId != lastSyncedSelectionId || rootId != lastSyncedRootId {
             revealAncestors(for: selectedId, coordinator: coordinator)
         }
@@ -776,6 +803,14 @@ private final class HierarchyOutlineContainerView: NSView {
         }
         lastSyncedSelectionId = selectedId
         lastSyncedRootId = rootId
+
+        let details = "selected=\(selectedId) row=\(row) force=\(forceRevealAncestors)"
+        NativeDiagnostics.slowPath(
+            "outline_selection_sync",
+            startedAt: startedAt,
+            thresholdMs: 10,
+            details: details
+        )
     }
 
     private func isRowVisible(_ row: Int) -> Bool {
