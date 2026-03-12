@@ -145,6 +145,12 @@ private enum IncomingEvent {
     case error(String)
 }
 
+private enum PendingTerminalEvent {
+    case completed
+    case cancelled
+    case error(String)
+}
+
 private let ffiEventCallback: DsScanEventCallback = { eventPtr, userData in
     guard let eventPtr, let userData else {
         return
@@ -175,8 +181,11 @@ final class NativeScanStore: ObservableObject {
 
     private var session: DsSessionHandleRef?
     private var pendingPatches: [IncomingPatch] = []
+    private var pendingPatchCursor = 0
     private var patchFlushScheduled = false
     private let patchFlushIntervalSeconds: TimeInterval = 0.1
+    private let patchFlushTimeBudgetSeconds: TimeInterval = 0.012
+    private var pendingTerminalEvent: PendingTerminalEvent?
 
     init(launch: NativeLaunchOptions) {
         let discoveredDrives = NativeScanStore.discoverDrives()
@@ -487,22 +496,16 @@ final class NativeScanStore: ObservableObject {
             statusLine = "Scanning \(scannedBytesLabel) of \(targetBytesLabel)"
 
         case .completed:
-            flushPendingPatches()
-            scanState = .completed
-            statusLine = "Completed: \(scannedBytesLabel) scanned"
-            teardownSession(cancel: false, synchronous: false)
+            pendingTerminalEvent = .completed
+            schedulePatchFlush()
 
         case .cancelled:
-            flushPendingPatches()
-            scanState = .cancelled
-            statusLine = "Cancelled"
-            teardownSession(cancel: false, synchronous: false)
+            pendingTerminalEvent = .cancelled
+            schedulePatchFlush()
 
         case .error(let message):
-            flushPendingPatches()
-            scanState = .failed(message)
-            statusLine = message
-            teardownSession(cancel: false, synchronous: false)
+            pendingTerminalEvent = .error(message)
+            schedulePatchFlush()
         }
     }
 
@@ -518,27 +521,66 @@ final class NativeScanStore: ObservableObject {
 
     private func flushPendingPatches() {
         patchFlushScheduled = false
-        guard !pendingPatches.isEmpty else {
+        guard pendingPatchCursor < pendingPatches.count || pendingTerminalEvent != nil else {
             return
         }
 
-        let patches = pendingPatches
+        let start = CFAbsoluteTimeGetCurrent()
+        var appliedAnyPatch = false
+        while pendingPatchCursor < pendingPatches.count {
+            apply(patch: pendingPatches[pendingPatchCursor])
+            pendingPatchCursor += 1
+            appliedAnyPatch = true
+
+            if CFAbsoluteTimeGetCurrent() - start >= patchFlushTimeBudgetSeconds {
+                break
+            }
+        }
+
+        if appliedAnyPatch {
+            modelVersion &+= 1
+
+            if nodes[selectedNodeId] == nil {
+                selectedNodeId = rootNodeId
+            }
+            if nodes[zoomNodeId] == nil {
+                zoomNodeId = rootNodeId
+            }
+
+            if scanState == .running {
+                statusLine = "Scanning... \(nodes.count) nodes"
+            }
+        }
+
+        if pendingPatchCursor < pendingPatches.count {
+            schedulePatchFlush()
+            return
+        }
+
         pendingPatches.removeAll(keepingCapacity: true)
-        for patch in patches {
-            apply(patch: patch)
-        }
-        modelVersion &+= 1
+        pendingPatchCursor = 0
+        finalizeTerminalIfNeeded()
+    }
 
-        if nodes[selectedNodeId] == nil {
-            selectedNodeId = rootNodeId
+    private func finalizeTerminalIfNeeded() {
+        guard let terminal = pendingTerminalEvent else {
+            return
         }
-        if nodes[zoomNodeId] == nil {
-            zoomNodeId = rootNodeId
+        pendingTerminalEvent = nil
+
+        switch terminal {
+        case .completed:
+            scanState = .completed
+            statusLine = "Completed: \(scannedBytesLabel) scanned"
+        case .cancelled:
+            scanState = .cancelled
+            statusLine = "Cancelled"
+        case .error(let message):
+            scanState = .failed(message)
+            statusLine = message
         }
 
-        if scanState == .running {
-            statusLine = "Scanning... \(nodes.count) nodes"
-        }
+        teardownSession(cancel: false, synchronous: false)
     }
 
     private func apply(patch: IncomingPatch) {
@@ -590,7 +632,7 @@ final class NativeScanStore: ObservableObject {
                 children: []
             )
 
-            if !parent.children.contains(patch.id) {
+            if existing == nil || previousParent != patch.parentId {
                 parent.children.append(patch.id)
             }
             nodes[parentId] = parent
@@ -599,7 +641,9 @@ final class NativeScanStore: ObservableObject {
 
     private func resetModel(path: String) {
         pendingPatches.removeAll(keepingCapacity: false)
+        pendingPatchCursor = 0
         patchFlushScheduled = false
+        pendingTerminalEvent = nil
         progress = NativeProgress()
         rootNodeId = 0
         selectedNodeId = 0
