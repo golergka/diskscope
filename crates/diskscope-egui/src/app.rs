@@ -200,15 +200,21 @@ impl DiskscopeApp {
     }
 
     fn explored_fraction(&self) -> f32 {
-        if self.progress.target_bytes == 0 {
+        let denominator = if self.progress.occupied_bytes > 0 {
+            self.progress.occupied_bytes
+        } else {
+            self.progress.target_bytes
+        };
+
+        if denominator == 0 {
             return if self.progress.bytes_seen > 0 {
                 1.0
             } else {
                 0.0
             };
         }
-        let seen = self.progress.bytes_seen.min(self.progress.target_bytes);
-        (seen as f64 / self.progress.target_bytes as f64) as f32
+        let seen = self.progress.bytes_seen.min(denominator);
+        (seen as f64 / denominator as f64) as f32
     }
 
     fn explored_rect(bounds: egui::Rect, explored_fraction: f32) -> egui::Rect {
@@ -634,14 +640,20 @@ impl DiskscopeApp {
 
         ui.horizontal(|ui| {
             ui.label(format!("State: {}", self.status_line));
-            if self.progress.target_bytes > 0 {
-                let shown_seen = self.progress.bytes_seen.min(self.progress.target_bytes);
-                let fraction = (shown_seen as f64 / self.progress.target_bytes as f64) as f32;
+            let denominator = if self.progress.occupied_bytes > 0 {
+                self.progress.occupied_bytes
+            } else {
+                self.progress.target_bytes
+            };
+
+            if denominator > 0 {
+                let shown_seen = self.progress.bytes_seen.min(denominator);
+                let fraction = (shown_seen as f64 / denominator as f64) as f32;
                 let clamped = fraction.clamp(0.0, 1.0);
                 let progress_text = format!(
                     "{} / {} occupied",
                     Self::human_size(shown_seen),
-                    Self::human_size(self.progress.target_bytes),
+                    Self::human_size(denominator),
                 );
                 ui.add(
                     egui::ProgressBar::new(clamped)
@@ -652,6 +664,13 @@ impl DiskscopeApp {
                 ui.label(format!(
                     "Scanned: {}",
                     Self::human_size(self.progress.bytes_seen)
+                ));
+            }
+
+            if self.progress.total_bytes > 0 {
+                ui.label(format!(
+                    "Capacity: {}",
+                    Self::human_size(self.progress.total_bytes)
                 ));
             }
         });
@@ -747,6 +766,8 @@ impl DiskscopeApp {
         ));
         ui.label(format!("Files seen: {}", self.progress.files_seen));
         ui.label(format!("Bytes seen: {}", self.progress.bytes_seen));
+        ui.label(format!("Occupied bytes: {}", self.progress.occupied_bytes));
+        ui.label(format!("Total bytes: {}", self.progress.total_bytes));
         ui.label(format!("Target bytes: {}", self.progress.target_bytes));
         ui.label(format!("Queued jobs: {}", self.progress.queued_jobs));
         ui.label(format!("Active workers: {}", self.progress.active_workers));

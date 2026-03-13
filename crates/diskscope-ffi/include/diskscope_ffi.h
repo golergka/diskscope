@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define DS_FFI_ABI_VERSION 1u
+#define DS_FFI_ABI_VERSION 2u
 #define DS_EVENT_BATCH 1u
 #define DS_EVENT_PROGRESS 2u
 #define DS_EVENT_COMPLETED 3u
@@ -43,6 +43,8 @@ typedef struct DsProgressStats {
   uint64_t directories_seen;
   uint64_t files_seen;
   uint64_t bytes_seen;
+  uint64_t occupied_bytes;
+  uint64_t total_bytes;
   uint64_t target_bytes;
   uint64_t queued_jobs;
   uint64_t active_workers;

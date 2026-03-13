@@ -11,6 +11,8 @@ pub struct ProgressStats {
     pub directories_seen: u64,
     pub files_seen: u64,
     pub bytes_seen: u64,
+    pub occupied_bytes: u64,
+    pub total_bytes: u64,
     pub target_bytes: u64,
     pub queued_jobs: usize,
     pub active_workers: usize,

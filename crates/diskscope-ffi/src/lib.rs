@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 
-const DS_FFI_ABI_VERSION: u32 = 1;
+const DS_FFI_ABI_VERSION: u32 = 2;
 const DS_EVENT_BATCH: u32 = 1;
 const DS_EVENT_PROGRESS: u32 = 2;
 const DS_EVENT_COMPLETED: u32 = 3;
@@ -32,6 +32,8 @@ pub struct DsProgressStats {
     pub directories_seen: u64,
     pub files_seen: u64,
     pub bytes_seen: u64,
+    pub occupied_bytes: u64,
+    pub total_bytes: u64,
     pub target_bytes: u64,
     pub queued_jobs: u64,
     pub active_workers: u64,
@@ -291,6 +293,8 @@ fn encode_progress(progress: &ProgressStats) -> DsProgressStats {
         directories_seen: progress.directories_seen,
         files_seen: progress.files_seen,
         bytes_seen: progress.bytes_seen,
+        occupied_bytes: progress.occupied_bytes,
+        total_bytes: progress.total_bytes,
         target_bytes: progress.target_bytes,
         queued_jobs: progress.queued_jobs as u64,
         active_workers: progress.active_workers as u64,
@@ -340,7 +344,7 @@ mod tests {
 
     #[test]
     fn abi_version_is_stable() {
-        assert_eq!(ds_ffi_abi_version(), 1);
+        assert_eq!(ds_ffi_abi_version(), 2);
     }
 
     #[test]

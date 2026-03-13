@@ -82,21 +82,51 @@ struct ContentView: View {
     }
 
     private var progressBar: some View {
-        HStack(spacing: 10) {
-            Text("State: \(store.scanState.label)")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("State: \(store.scanState.label)")
+                    .font(.headline)
 
-            ProgressView(value: store.progressFraction)
-                .frame(maxWidth: .infinity)
+                ProgressView(value: store.progressFraction)
+                    .frame(maxWidth: .infinity)
 
-            Text("\(store.scannedBytesLabel) / \(store.targetBytesLabel)")
-                .font(.system(.body, design: .rounded))
+                Text("\(store.scannedBytesLabel) / \(store.occupiedBytesLabel)")
+                    .font(.system(.body, design: .rounded))
+            }
+
+            HStack(spacing: 14) {
+                Text("Scanned: \(store.scannedBytesLabel)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Occupied: \(store.occupiedBytesLabel)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Capacity: \(store.totalBytesLabel)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if store.errorNodeCount > 0 {
+                    Text("Errors: \(store.errorNodeCount)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.red)
+                }
+
+                if store.deferredNodeCount > 0 {
+                    Text("Deferred: \(store.deferredNodeCount)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.orange)
+                }
+
+                Spacer()
+            }
         }
         .overlay(alignment: .leading) {
             Text(store.statusLine)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .padding(.top, 28)
+                .padding(.top, 48)
         }
         .padding(.bottom, 16)
     }

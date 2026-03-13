@@ -2,7 +2,7 @@
 
 ## ABI version
 
-- Constant: `DS_FFI_ABI_VERSION = 1`
+- Constant: `DS_FFI_ABI_VERSION = 2`
 - Runtime check symbol:
   - `uint32_t ds_ffi_abi_version(void)`
 
@@ -74,6 +74,8 @@ Fields:
 - `directories_seen`
 - `files_seen`
 - `bytes_seen`
+- `occupied_bytes`
+- `total_bytes`
 - `target_bytes`
 - `queued_jobs`
 - `active_workers`

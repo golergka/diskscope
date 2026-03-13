@@ -30,6 +30,8 @@ flowchart LR
   - FFI callback decodes event payload immediately.
   - decoded events are dispatched to main thread.
   - UI applies patches in-place (stable node identity for selection/zoom sync).
+  - treemap layout runs off-main-thread and streams progressive depth frames back to main.
+  - layout jobs are generation-cancelled when newer model updates arrive.
 
 ### Ownership/lifetime
 
@@ -51,6 +53,13 @@ xcodebuild \
   build
 cargo run -p diskscope -- ui-native --path / --start
 ```
+
+## Runtime behavior notes
+
+- Progress is shown as: scanned bytes / occupied bytes, with total capacity shown alongside.
+- Root node size updates incrementally (`Partial`) while workers complete subtrees.
+- During scan, treemap relayout is throttled and adaptive (`~1-3s`) using patch-backlog signals.
+- Top bar exposes aggregate `Error` and `Deferred` counts so incomplete coverage is explicit.
 
 ## Xcode target notes
 
@@ -86,3 +95,13 @@ Then rebuild in Xcode.
 Confirm `crates/diskscope-ffi/include/diskscope_ffi.h` exists and target header search path contains:
 
 - `$(SRCROOT)/../../../crates/diskscope-ffi/include`
+
+### App shows `FFI ABI mismatch`
+
+- Native app and Rust FFI were built from different revisions.
+- Rebuild both:
+
+```bash
+cargo build -p diskscope-ffi --release
+xcodebuild -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj -scheme DiskscopeNative -configuration Debug -derivedDataPath native/macos/DiskscopeNative/build build
+```

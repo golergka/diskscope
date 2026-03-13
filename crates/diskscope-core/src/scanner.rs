@@ -503,9 +503,13 @@ fn run_realtime_scan(
 
     let mut root_children = Vec::<NodeId>::new();
     let mut root_size = 0_u64;
+    let mut root_partial_size = 0_u64;
+    let mut root_partial_dirty = false;
     let mut pending_subtrees = 0_usize;
     let mut pending_patches = Vec::<Patch>::new();
     let mut progress = ProgressStats::default();
+    progress.total_bytes = root_volume_size_bytes;
+    progress.occupied_bytes = root_occupied_bytes;
     progress.target_bytes = root_occupied_bytes;
     let mut active_workers = 0_usize;
 
@@ -575,6 +579,7 @@ fn run_realtime_scan(
                 let id = id_alloc.fetch_add(1, AtomicOrdering::Relaxed);
                 root_children.push(id);
                 root_size = root_size.saturating_add(size);
+                root_partial_size = root_partial_size.max(root_size);
                 progress.files_seen = progress.files_seen.saturating_add(1);
                 progress.bytes_seen = progress
                     .bytes_seen
@@ -666,6 +671,7 @@ fn run_realtime_scan(
             let id = id_alloc.fetch_add(1, AtomicOrdering::Relaxed);
             root_children.push(id);
             root_size = root_size.saturating_add(size);
+            root_partial_size = root_partial_size.max(root_size);
             progress.files_seen = progress.files_seen.saturating_add(1);
             progress.bytes_seen = progress
                 .bytes_seen
@@ -783,10 +789,14 @@ fn run_realtime_scan(
                         progress.directories_seen.saturating_add(delta.directories);
                     progress.files_seen = progress.files_seen.saturating_add(delta.files);
                     progress.bytes_seen = progress.bytes_seen.saturating_add(delta.bytes);
+                    root_partial_size = root_partial_size.max(progress.bytes_seen);
+                    root_partial_dirty = true;
                 }
                 WorkerMessage::Subtree(result) => {
                     pending_subtrees = pending_subtrees.saturating_sub(1);
                     root_size = root_size.saturating_add(result.total_size_bytes);
+                    root_partial_size = root_partial_size.max(root_size);
+                    root_partial_dirty = true;
                     for node in result.nodes {
                         model.upsert_node(node.clone());
                         pending_patches.push(Patch::UpsertNode(node));
@@ -809,6 +819,16 @@ fn run_realtime_scan(
         }
 
         if last_flush.elapsed() >= Duration::from_millis(LIVE_UPDATE_INTERVAL_MS) {
+            if root_partial_dirty {
+                if let Some(root_node) = model.get_mut(root_id) {
+                    root_node.size_bytes = root_partial_size;
+                    root_node.size_state = SizeState::Partial;
+                    root_node.children_state = ChildrenState::Partial;
+                    pending_patches.push(Patch::UpsertNode(root_node.clone()));
+                }
+                root_partial_dirty = false;
+            }
+
             progress.queued_jobs = pending_subtrees;
             progress.active_workers = active_workers;
             progress.elapsed_ms = started_at.elapsed().as_millis();

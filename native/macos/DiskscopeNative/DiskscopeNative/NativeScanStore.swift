@@ -7,6 +7,7 @@ private let kEventProgress = UInt32(DS_EVENT_PROGRESS)
 private let kEventCompleted = UInt32(DS_EVENT_COMPLETED)
 private let kEventCancelled = UInt32(DS_EVENT_CANCELLED)
 private let kEventError = UInt32(DS_EVENT_ERROR)
+private let kExpectedAbiVersion = UInt32(DS_FFI_ABI_VERSION)
 
 private let kNodeDirectory = UInt8(DS_NODE_KIND_DIRECTORY)
 private let kNodeFile = UInt8(DS_NODE_KIND_FILE)
@@ -153,6 +154,8 @@ struct NativeProgress {
     var directoriesSeen: UInt64 = 0
     var filesSeen: UInt64 = 0
     var bytesSeen: UInt64 = 0
+    var occupiedBytes: UInt64 = 0
+    var totalBytes: UInt64 = 0
     var targetBytes: UInt64 = 0
     var queuedJobs: UInt64 = 0
     var activeWorkers: UInt64 = 0
@@ -232,6 +235,9 @@ final class NativeScanStore: ObservableObject {
     @Published var zoomNodeId: UInt64 = 0
     @Published var expandedNodes: Set<UInt64> = [0]
     @Published var modelVersion: UInt64 = 0
+    @Published private(set) var pendingPatchBacklog: Int = 0
+    @Published private(set) var errorNodeCount: Int = 0
+    @Published private(set) var deferredNodeCount: Int = 0
     private var childOrderRevisions: [UInt64: UInt64] = [:]
 
     private var session: DsSessionHandleRef?
@@ -241,8 +247,12 @@ final class NativeScanStore: ObservableObject {
     private let patchFlushIntervalSeconds: TimeInterval = 0.1
     private let patchFlushTimeBudgetSeconds: TimeInterval = 0.012
     private var pendingTerminalEvent: PendingTerminalEvent?
+    private var ffiAbiCompatible = true
 
     init(launch: NativeLaunchOptions) {
+        let runtimeAbi = ds_ffi_abi_version()
+        ffiAbiCompatible = runtimeAbi == kExpectedAbiVersion
+
         let discoveredDrives = NativeScanStore.discoverDrives()
         availableDrives = discoveredDrives
         selectedDrive = discoveredDrives.first ?? "/"
@@ -257,6 +267,12 @@ final class NativeScanStore: ObservableObject {
         }
 
         resetModel(path: activePath)
+
+        if !ffiAbiCompatible {
+            scanState = .failed("FFI ABI mismatch")
+            statusLine = "FFI ABI mismatch: native=\(runtimeAbi), expected=\(kExpectedAbiVersion)"
+            NativeDiagnostics.warning("ffi_abi_mismatch native=\(runtimeAbi) expected=\(kExpectedAbiVersion)")
+        }
 
         if launch.autoStart {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -282,23 +298,39 @@ final class NativeScanStore: ObservableObject {
         NativeScanStore.humanBytes(progress.targetBytes)
     }
 
+    var occupiedBytesLabel: String {
+        NativeScanStore.humanBytes(progress.occupiedBytes)
+    }
+
+    var totalBytesLabel: String {
+        NativeScanStore.humanBytes(progress.totalBytes)
+    }
+
     var progressFraction: Double {
-        guard progress.targetBytes > 0 else {
+        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+        guard denominator > 0 else {
             return 0
         }
-        let scanned = min(progress.bytesSeen, progress.targetBytes)
-        return Double(scanned) / Double(progress.targetBytes)
+        let scanned = min(progress.bytesSeen, denominator)
+        return Double(scanned) / Double(denominator)
     }
 
     var exploredFraction: Double {
-        guard progress.targetBytes > 0 else {
+        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+        guard denominator > 0 else {
             return progress.bytesSeen > 0 ? 1.0 : 0.0
         }
-        let scanned = min(progress.bytesSeen, progress.targetBytes)
-        return Double(scanned) / Double(progress.targetBytes)
+        let scanned = min(progress.bytesSeen, denominator)
+        return Double(scanned) / Double(denominator)
     }
 
     func startScan() {
+        guard ffiAbiCompatible else {
+            scanState = .failed("FFI ABI mismatch")
+            statusLine = "FFI ABI mismatch. Rebuild native app + Rust FFI together."
+            return
+        }
+
         teardownSession(cancel: true, synchronous: true)
 
         let path = activePath
@@ -511,6 +543,8 @@ final class NativeScanStore: ObservableObject {
                 directoriesSeen: event.progress.directories_seen,
                 filesSeen: event.progress.files_seen,
                 bytesSeen: event.progress.bytes_seen,
+                occupiedBytes: event.progress.occupied_bytes,
+                totalBytes: event.progress.total_bytes,
                 targetBytes: event.progress.target_bytes,
                 queuedJobs: event.progress.queued_jobs,
                 activeWorkers: event.progress.active_workers,
@@ -586,11 +620,12 @@ final class NativeScanStore: ObservableObject {
         switch decoded {
         case .batch(let patches):
             pendingPatches.append(contentsOf: patches)
+            refreshPendingPatchBacklog()
             schedulePatchFlush()
 
         case .progress(let incoming):
             progress = incoming
-            statusLine = "Scanning \(scannedBytesLabel) of \(targetBytesLabel)"
+            statusLine = "Scanning \(scannedBytesLabel) of \(occupiedBytesLabel) occupied"
 
         case .completed:
             pendingTerminalEvent = .completed
@@ -661,9 +696,11 @@ final class NativeScanStore: ObservableObject {
             }
 
             if scanState == .running {
-                statusLine = "Scanning... \(nodes.count) nodes"
+                statusLine = "Scanning \(scannedBytesLabel) of \(occupiedBytesLabel) occupied"
             }
         }
+
+        refreshPendingPatchBacklog()
 
         if pendingPatchCursor < pendingPatches.count {
             schedulePatchFlush()
@@ -672,6 +709,7 @@ final class NativeScanStore: ObservableObject {
 
         pendingPatches.removeAll(keepingCapacity: true)
         pendingPatchCursor = 0
+        refreshPendingPatchBacklog()
         finalizeTerminalIfNeeded()
     }
 
@@ -684,7 +722,11 @@ final class NativeScanStore: ObservableObject {
         switch terminal {
         case .completed:
             scanState = .completed
-            statusLine = "Completed: \(scannedBytesLabel) scanned"
+            if errorNodeCount > 0 {
+                statusLine = "Completed with \(errorNodeCount) scan errors"
+            } else {
+                statusLine = "Completed: \(scannedBytesLabel) scanned"
+            }
             NativeDiagnostics.info("scan_terminal completed scanned=\(progress.bytesSeen) target=\(progress.targetBytes)")
         case .cancelled:
             scanState = .cancelled
@@ -704,6 +746,8 @@ final class NativeScanStore: ObservableObject {
         let previousParent = existing?.parentId
         let previousName = existing?.name
         let previousSize = existing?.sizeBytes
+        let previousErrorFlag = existing?.errorFlag ?? false
+        let previousDeferred = existing?.childrenState == .collapsedByThreshold
 
         var node = existing ?? NativeNode(
             id: patch.id,
@@ -729,6 +773,23 @@ final class NativeScanStore: ObservableObject {
         node.isHidden = patch.isHidden
         node.isSymlink = patch.isSymlink
         nodes[patch.id] = node
+
+        if previousErrorFlag != patch.errorFlag {
+            if patch.errorFlag {
+                errorNodeCount += 1
+            } else {
+                errorNodeCount = max(0, errorNodeCount - 1)
+            }
+        }
+
+        let nowDeferred = patch.childrenState == .collapsedByThreshold
+        if previousDeferred != nowDeferred {
+            if nowDeferred {
+                deferredNodeCount += 1
+            } else {
+                deferredNodeCount = max(0, deferredNodeCount - 1)
+            }
+        }
 
         if let oldParent = previousParent, oldParent != patch.parentId, var parent = nodes[oldParent] {
             let originalCount = parent.children.count
@@ -775,6 +836,9 @@ final class NativeScanStore: ObservableObject {
         patchFlushScheduled = false
         pendingTerminalEvent = nil
         progress = NativeProgress()
+        pendingPatchBacklog = 0
+        errorNodeCount = 0
+        deferredNodeCount = 0
         rootNodeId = 0
         selectedNodeId = 0
         zoomNodeId = 0
@@ -798,6 +862,10 @@ final class NativeScanStore: ObservableObject {
                 children: []
             )
         ]
+    }
+
+    private func refreshPendingPatchBacklog() {
+        pendingPatchBacklog = max(0, pendingPatches.count - pendingPatchCursor)
     }
 
     private func teardownSession(cancel: Bool, synchronous: Bool) {

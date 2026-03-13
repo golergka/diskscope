@@ -114,7 +114,8 @@ Implemented in shared scan core:
 - threshold-based collapsed nodes (`max(0.1% volume, 64 MiB)` default).
 - ignore patterns, hidden/symlink/xdev controls.
 - binary snapshot output and JSON tree output for tooling.
-- progress target based on occupied bytes (`total - free`) instead of raw volume capacity.
+- progress payload includes scanned bytes + occupied bytes + total capacity bytes.
+- root node size is streamed as `Partial` during scan (no long-lived `0 B` root while workers run).
 
 Native macOS frontend currently includes:
 
@@ -124,9 +125,12 @@ Native macOS frontend currently includes:
 - native `NSOutlineView` hierarchy tree (collapsible, keyboard-navigable) with `Name` and `Size` columns.
 - hierarchy refresh is coalesced/throttled and switches to visible-row updates for very large expanded trees.
 - AppKit treemap with area proportional to bytes.
+- treemap layout is computed off the UI thread with generation-cancelled progressive depth updates.
+- layout cadence adapts during scan (`~1-3s`) based on patch backlog to keep UI responsive.
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.
+- top bar shows scanned / occupied / capacity plus live `Error` and `Deferred` counters.
 - optional runtime diagnostics via `DISKSCOPE_NATIVE_TRACE=1` (logs slow patch flush, outline refresh/selection sync, treemap relayout/draw FPS to unified macOS logs).
 
 Known limitations:

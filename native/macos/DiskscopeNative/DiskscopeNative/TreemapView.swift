@@ -19,6 +19,34 @@ private struct EdgeSegment {
     let to: CGPoint
 }
 
+private struct LayoutNodeSnapshot {
+    let id: UInt64
+    let name: String
+    let sizeBytes: UInt64
+    let kind: NativeNodeKind
+    let childrenState: NativeChildrenState
+    var children: [UInt64]
+}
+
+private struct LayoutSnapshot {
+    let rootId: UInt64
+    let nodes: [UInt64: LayoutNodeSnapshot]
+    let exploredBounds: CGRect
+}
+
+private struct LayoutWorkItem {
+    let nodeId: UInt64
+    let rect: CGRect
+    let depth: Int
+}
+
+private struct LayoutFrame {
+    let generation: UInt64
+    let rects: [TreemapRect]
+    let exploredBounds: CGRect
+    let isFinal: Bool
+}
+
 struct TreemapView: NSViewRepresentable {
     let store: NativeScanStore
     let rootId: UInt64
@@ -66,16 +94,30 @@ final class TreemapCanvas: NSView {
     private var sharedBorderSegments: [EdgeSegment] = []
     private var edgeKeysByNode: [UInt64: [EdgeKey]] = [:]
     private var exploredEdgeKeys: [EdgeKey] = []
+
     private var layoutScheduled = false
     private var layoutDirty = false
-    private var lastLayoutAt: CFAbsoluteTime = 0
+    private var layoutInFlight = false
+    private var lastLayoutKickAt: CFAbsoluteTime = 0
+
+    private let generationLock = NSLock()
+    private var latestLayoutGeneration: UInt64 = 0
+    private let layoutQueue = DispatchQueue(
+        label: "com.diskscope.native.treemap-layout",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
     private var drawSampleStartedAt: CFAbsoluteTime = 0
     private var drawSampleCount = 0
 
     private let maxDepth = 10
     private let minRectArea: CGFloat = 9
-    private let maxRects = 20_000
-    private let minLayoutIntervalSeconds: CFAbsoluteTime = 0.12
+    private let maxRects = 35_000
+    private let layoutNodeBudget = 100_000
+    private let minLayoutIntervalIdleSeconds: CFAbsoluteTime = 0.16
+    private let minLayoutIntervalScanningSeconds: CFAbsoluteTime = 1.0
+    private let maxLayoutIntervalScanningSeconds: CFAbsoluteTime = 3.0
 
     var onSelect: ((UInt64) -> Void)?
     var onZoom: ((UInt64) -> Void)?
@@ -92,17 +134,21 @@ final class TreemapCanvas: NSView {
         exploredFraction: Double
     ) {
         let normalizedExploredFraction = max(0.0, min(1.0, exploredFraction))
+        let rootChanged = rootId != self.rootId
+        let storeChanged = self.store !== store
         let layoutInputsChanged = version != modelVersion
-            || rootId != self.rootId
-            || self.store !== store
+            || rootChanged
+            || storeChanged
             || abs(self.exploredFraction - normalizedExploredFraction) > 0.0005
+
         self.store = store
         self.rootId = rootId
         modelVersion = version
         self.exploredFraction = normalizedExploredFraction
         self.selectedId = selectedId
+
         if layoutInputsChanged {
-            scheduleLayout()
+            scheduleLayout(forceImmediate: rootChanged || storeChanged)
         } else {
             needsDisplay = true
         }
@@ -124,7 +170,8 @@ final class TreemapCanvas: NSView {
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .font: NSFont.systemFont(ofSize: 14, weight: .medium)
             ]
-            let text = NSString(string: "Start a scan to render treemap")
+            let placeholder = layoutInFlight ? "Computing layout..." : "Start a scan to render treemap"
+            let text = NSString(string: placeholder)
             text.draw(at: CGPoint(x: 20, y: 20), withAttributes: attrs)
             return
         }
@@ -186,12 +233,13 @@ final class TreemapCanvas: NSView {
         layoutScheduled = true
 
         let now = CFAbsoluteTimeGetCurrent()
+        let interval = forceImmediate ? 0 : layoutIntervalSeconds()
         let delay: CFAbsoluteTime
-        if forceImmediate || lastLayoutAt == 0 {
+        if forceImmediate || lastLayoutKickAt == 0 {
             delay = 0
         } else {
-            let elapsed = now - lastLayoutAt
-            delay = max(0, minLayoutIntervalSeconds - elapsed)
+            let elapsed = now - lastLayoutKickAt
+            delay = max(0, interval - elapsed)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -203,61 +251,375 @@ final class TreemapCanvas: NSView {
                 return
             }
             self.layoutDirty = false
-            self.lastLayoutAt = CFAbsoluteTimeGetCurrent()
-            self.recomputeLayout()
+            self.lastLayoutKickAt = CFAbsoluteTimeGetCurrent()
+            self.launchLayoutJob()
+        }
+    }
+
+    private func layoutIntervalSeconds() -> CFAbsoluteTime {
+        guard let store else {
+            return minLayoutIntervalIdleSeconds
+        }
+
+        if store.scanState == .running {
+            if store.pendingPatchBacklog >= 24_000 {
+                return maxLayoutIntervalScanningSeconds
+            }
+            if store.pendingPatchBacklog >= 8_000 {
+                return 2.0
+            }
+            return minLayoutIntervalScanningSeconds
+        }
+
+        return minLayoutIntervalIdleSeconds
+    }
+
+    private func launchLayoutJob() {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        guard bounds.width > 4, bounds.height > 4 else {
+            clearLayout()
+            return
+        }
+        guard let store else {
+            clearLayout()
+            return
+        }
+
+        let inset = bounds.insetBy(dx: 2, dy: 2)
+        let exploredBounds = exploredRect(in: inset, fraction: exploredFraction)
+        guard exploredBounds.width > 2, exploredBounds.height > 2 else {
+            clearLayout(exploredBounds: exploredBounds)
+            return
+        }
+
+        guard let snapshot = captureLayoutSnapshot(
+            store: store,
+            rootId: rootId,
+            exploredBounds: exploredBounds
+        ) else {
+            clearLayout(exploredBounds: exploredBounds)
+            return
+        }
+
+        let generation = reserveLayoutGeneration()
+        layoutInFlight = true
+
+        NativeDiagnostics.slowPath(
+            "treemap_snapshot",
+            startedAt: startedAt,
+            thresholdMs: 14,
+            details: "gen=\(generation) nodes=\(snapshot.nodes.count) backlog=\(store.pendingPatchBacklog)"
+        )
+
+        layoutQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.computeLayoutProgressively(snapshot: snapshot, generation: generation)
+        }
+    }
+
+    private func captureLayoutSnapshot(
+        store: NativeScanStore,
+        rootId: UInt64,
+        exploredBounds: CGRect
+    ) -> LayoutSnapshot? {
+        guard let rootNode = store.nodes[rootId] else {
+            return nil
+        }
+
+        var snapshots: [UInt64: LayoutNodeSnapshot] = [:]
+        snapshots.reserveCapacity(min(layoutNodeBudget, store.nodes.count))
+
+        var queue: [UInt64] = [rootId]
+        var enqueued: Set<UInt64> = [rootId]
+        var cursor = 0
+
+        snapshots[rootId] = LayoutNodeSnapshot(
+            id: rootNode.id,
+            name: rootNode.name,
+            sizeBytes: rootNode.sizeBytes,
+            kind: rootNode.kind,
+            childrenState: rootNode.childrenState,
+            children: []
+        )
+
+        while cursor < queue.count {
+            if snapshots.count >= layoutNodeBudget {
+                break
+            }
+
+            let nodeId = queue[cursor]
+            cursor += 1
+
+            guard let node = store.nodes[nodeId] else {
+                continue
+            }
+
+            if snapshots[nodeId] == nil {
+                snapshots[nodeId] = LayoutNodeSnapshot(
+                    id: node.id,
+                    name: node.name,
+                    sizeBytes: node.sizeBytes,
+                    kind: node.kind,
+                    childrenState: node.childrenState,
+                    children: []
+                )
+            }
+
+            let canExpand = node.kind == .directory
+                && node.childrenState != .collapsedByThreshold
+                && !node.children.isEmpty
+            guard canExpand else {
+                continue
+            }
+
+            var keptChildren: [UInt64] = []
+            keptChildren.reserveCapacity(node.children.count)
+
+            for childId in node.children {
+                guard let child = store.nodes[childId] else {
+                    continue
+                }
+
+                if snapshots[childId] == nil {
+                    if snapshots.count >= layoutNodeBudget {
+                        break
+                    }
+
+                    snapshots[childId] = LayoutNodeSnapshot(
+                        id: child.id,
+                        name: child.name,
+                        sizeBytes: child.sizeBytes,
+                        kind: child.kind,
+                        childrenState: child.childrenState,
+                        children: []
+                    )
+                }
+
+                keptChildren.append(childId)
+
+                let childExpandable = child.kind == .directory
+                    && child.childrenState != .collapsedByThreshold
+                    && !child.children.isEmpty
+
+                if childExpandable,
+                   !enqueued.contains(childId),
+                   queue.count < layoutNodeBudget {
+                    queue.append(childId)
+                    enqueued.insert(childId)
+                }
+            }
+
+            if var entry = snapshots[nodeId] {
+                entry.children = keptChildren
+                snapshots[nodeId] = entry
+            }
+        }
+
+        return LayoutSnapshot(rootId: rootId, nodes: snapshots, exploredBounds: exploredBounds)
+    }
+
+    private func computeLayoutProgressively(snapshot: LayoutSnapshot, generation: UInt64) {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+
+        var output: [TreemapRect] = []
+        output.reserveCapacity(min(maxRects, snapshot.nodes.count))
+
+        var currentLevel: [LayoutWorkItem] = [
+            LayoutWorkItem(nodeId: snapshot.rootId, rect: snapshot.exploredBounds, depth: 0)
+        ]
+
+        var levelsBuilt = 0
+        var emittedAnyFrame = false
+
+        while !currentLevel.isEmpty && levelsBuilt < maxDepth && output.count < maxRects {
+            guard isLayoutGenerationCurrent(generation) else {
+                return
+            }
+
+            var nextLevel: [LayoutWorkItem] = []
+            nextLevel.reserveCapacity(currentLevel.count * 2)
+
+            for work in currentLevel {
+                guard isLayoutGenerationCurrent(generation) else {
+                    return
+                }
+
+                guard let node = snapshot.nodes[work.nodeId], !node.children.isEmpty else {
+                    continue
+                }
+
+                let children = sortedChildren(node.children, nodes: snapshot.nodes)
+                if children.isEmpty {
+                    continue
+                }
+
+                let total = children
+                    .map { max(Double(snapshot.nodes[$0]?.sizeBytes ?? 1), 1.0) }
+                    .reduce(0, +)
+                if total <= 0 {
+                    continue
+                }
+
+                let horizontal = work.depth % 2 == 0
+                var cursor = horizontal ? work.rect.minX : work.rect.minY
+                let totalExtent = horizontal ? work.rect.width : work.rect.height
+
+                for (index, childId) in children.enumerated() {
+                    guard isLayoutGenerationCurrent(generation) else {
+                        return
+                    }
+                    if output.count >= maxRects {
+                        break
+                    }
+
+                    let childSize = max(Double(snapshot.nodes[childId]?.sizeBytes ?? 1), 1.0)
+                    let isLast = index == children.count - 1
+                    var extent = CGFloat(childSize / total) * totalExtent
+                    if isLast {
+                        extent = horizontal ? work.rect.maxX - cursor : work.rect.maxY - cursor
+                    }
+                    if extent < 1.5 {
+                        continue
+                    }
+
+                    let childRect: CGRect
+                    if horizontal {
+                        childRect = CGRect(
+                            x: cursor,
+                            y: work.rect.minY,
+                            width: extent,
+                            height: work.rect.height
+                        )
+                    } else {
+                        childRect = CGRect(
+                            x: work.rect.minX,
+                            y: cursor,
+                            width: work.rect.width,
+                            height: extent
+                        )
+                    }
+                    cursor += extent
+
+                    if childRect.width * childRect.height < minRectArea {
+                        continue
+                    }
+
+                    output.append(TreemapRect(nodeId: childId, rect: childRect, depth: work.depth))
+
+                    if let childNode = snapshot.nodes[childId],
+                       childNode.kind == .directory,
+                       childNode.childrenState != .collapsedByThreshold,
+                       !childNode.children.isEmpty,
+                       work.depth + 1 < maxDepth {
+                        nextLevel.append(
+                            LayoutWorkItem(
+                                nodeId: childId,
+                                rect: childRect,
+                                depth: work.depth + 1
+                            )
+                        )
+                    }
+                }
+            }
+
+            levelsBuilt += 1
+            let isFinal = nextLevel.isEmpty || levelsBuilt >= maxDepth || output.count >= maxRects
+            emitLayoutFrame(
+                LayoutFrame(
+                    generation: generation,
+                    rects: output,
+                    exploredBounds: snapshot.exploredBounds,
+                    isFinal: isFinal
+                )
+            )
+            emittedAnyFrame = true
+
+            if isFinal {
+                break
+            }
+
+            currentLevel = nextLevel
+        }
+
+        if !emittedAnyFrame {
+            emitLayoutFrame(
+                LayoutFrame(
+                    generation: generation,
+                    rects: [],
+                    exploredBounds: snapshot.exploredBounds,
+                    isFinal: true
+                )
+            )
+        }
+
+        if isLayoutGenerationCurrent(generation) {
+            NativeDiagnostics.slowPath(
+                "treemap_relayout",
+                startedAt: startedAt,
+                thresholdMs: 18,
+                details: "gen=\(generation) rects=\(output.count) levels=\(levelsBuilt) nodes=\(snapshot.nodes.count)"
+            )
+        }
+    }
+
+    private func emitLayoutFrame(_ frame: LayoutFrame) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            guard self.isLayoutGenerationCurrent(frame.generation) else {
+                return
+            }
+
+            self.rects = frame.rects
+            self.exploredBounds = frame.exploredBounds
+            self.rebuildSharedBorders()
+            if frame.isFinal {
+                self.layoutInFlight = false
+            }
             self.needsDisplay = true
         }
     }
 
-    private func recomputeLayout() {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        guard bounds.width > 4, bounds.height > 4 else {
-            rects = []
-            sharedBorderSegments = []
-            edgeKeysByNode = [:]
-            exploredEdgeKeys = []
-            exploredBounds = .zero
-            return
-        }
-        guard let store else {
-            rects = []
-            sharedBorderSegments = []
-            edgeKeysByNode = [:]
-            exploredEdgeKeys = []
-            exploredBounds = .zero
-            return
-        }
-        let nodes = store.nodes
+    private func clearLayout(exploredBounds: CGRect = .zero) {
+        rects = []
+        sharedBorderSegments = []
+        edgeKeysByNode = [:]
+        exploredEdgeKeys = []
+        self.exploredBounds = exploredBounds
+        layoutInFlight = false
+        needsDisplay = true
+    }
 
-        var output: [TreemapRect] = []
-        let inset = bounds.insetBy(dx: 2, dy: 2)
-        let computedExploredBounds = exploredRect(in: inset, fraction: exploredFraction)
-        exploredBounds = computedExploredBounds
-        guard computedExploredBounds.width > 2, computedExploredBounds.height > 2 else {
-            rects = []
-            sharedBorderSegments = []
-            edgeKeysByNode = [:]
-            exploredEdgeKeys = []
-            return
-        }
-        layoutChildren(
-            nodeId: rootId,
-            rect: computedExploredBounds,
-            depth: 0,
-            maxDepth: maxDepth,
-            nodes: nodes,
-            out: &output
-        )
-        rects = output
-        rebuildSharedBorders()
+    private func reserveLayoutGeneration() -> UInt64 {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        latestLayoutGeneration &+= 1
+        return latestLayoutGeneration
+    }
 
-        let details = "rects=\(rects.count) explored=\(String(format: "%.3f", exploredFraction))"
-        NativeDiagnostics.slowPath(
-            "treemap_relayout",
-            startedAt: startedAt,
-            thresholdMs: 18,
-            details: details
-        )
+    private func isLayoutGenerationCurrent(_ generation: UInt64) -> Bool {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return latestLayoutGeneration == generation
+    }
+
+    private func sortedChildren(
+        _ children: [UInt64],
+        nodes: [UInt64: LayoutNodeSnapshot]
+    ) -> [UInt64] {
+        children.sorted { left, right in
+            let leftNode = nodes[left]
+            let rightNode = nodes[right]
+            let leftSize = leftNode?.sizeBytes ?? 0
+            let rightSize = rightNode?.sizeBytes ?? 0
+            if leftSize == rightSize {
+                return (leftNode?.name ?? "") < (rightNode?.name ?? "")
+            }
+            return leftSize > rightSize
+        }
     }
 
     private func recordDrawSample(startedAt: CFAbsoluteTime) {
@@ -286,7 +648,7 @@ final class TreemapCanvas: NSView {
         }
 
         let fps = Double(drawSampleCount) / elapsed
-        NativeDiagnostics.debug("treemap_fps fps=\(String(format: "%.1f", fps)) rects=\(rects.count)")
+        NativeDiagnostics.debug("treemap_fps fps=\(String(format: "%.1f", fps)) rects=\(rects.count) inflight=\(layoutInFlight)")
         drawSampleStartedAt = now
         drawSampleCount = 0
     }
@@ -307,86 +669,6 @@ final class TreemapCanvas: NSView {
             width: bounds.width * sideScale,
             height: bounds.height * sideScale
         )
-    }
-
-    private func layoutChildren(
-        nodeId: UInt64,
-        rect: CGRect,
-        depth: Int,
-        maxDepth: Int,
-        nodes: [UInt64: NativeNode],
-        out: inout [TreemapRect]
-    ) {
-        if out.count >= maxRects || depth >= maxDepth || rect.width < 2 || rect.height < 2 {
-            return
-        }
-
-        guard let node = nodes[nodeId], !node.children.isEmpty else {
-            return
-        }
-
-        let children = sortedChildren(of: node, nodes: nodes)
-        let total = children
-            .map { max(Double(nodes[$0]?.sizeBytes ?? 1), 1.0) }
-            .reduce(0, +)
-
-        if total <= 0 {
-            return
-        }
-
-        let horizontal = depth % 2 == 0
-        var cursor = horizontal ? rect.minX : rect.minY
-        let totalExtent = horizontal ? rect.width : rect.height
-
-        for (index, childId) in children.enumerated() {
-            let childSize = max(Double(nodes[childId]?.sizeBytes ?? 1), 1.0)
-            let isLast = index == children.count - 1
-            var extent = CGFloat(childSize / total) * totalExtent
-            if isLast {
-                extent = horizontal ? rect.maxX - cursor : rect.maxY - cursor
-            }
-            if extent < 1.5 {
-                continue
-            }
-
-            let childRect: CGRect
-            if horizontal {
-                childRect = CGRect(x: cursor, y: rect.minY, width: extent, height: rect.height)
-            } else {
-                childRect = CGRect(x: rect.minX, y: cursor, width: rect.width, height: extent)
-            }
-            cursor += extent
-
-            if childRect.width * childRect.height < minRectArea {
-                continue
-            }
-
-            out.append(TreemapRect(nodeId: childId, rect: childRect, depth: depth))
-
-            if let childNode = nodes[childId],
-               childNode.kind == .directory,
-               childNode.childrenState != .collapsedByThreshold {
-                layoutChildren(
-                    nodeId: childId,
-                    rect: childRect,
-                    depth: depth + 1,
-                    maxDepth: maxDepth,
-                    nodes: nodes,
-                    out: &out
-                )
-            }
-        }
-    }
-
-    private func sortedChildren(of node: NativeNode, nodes: [UInt64: NativeNode]) -> [UInt64] {
-        node.children.sorted { left, right in
-            let leftSize = nodes[left]?.sizeBytes ?? 0
-            let rightSize = nodes[right]?.sizeBytes ?? 0
-            if leftSize == rightSize {
-                return (nodes[left]?.name ?? "") < (nodes[right]?.name ?? "")
-            }
-            return leftSize > rightSize
-        }
     }
 
     private func drawBackground() {
