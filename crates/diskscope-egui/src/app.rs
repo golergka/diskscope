@@ -16,10 +16,17 @@ pub struct UiLaunchOptions {
 }
 
 pub fn run_native_app(launch: UiLaunchOptions) -> Result<(), String> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/icon.png"
+    )))
+    .map_err(|error| format!("failed to decode app icon: {error}"))?;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Diskscope")
-            .with_inner_size([1320.0, 860.0]),
+            .with_inner_size([1320.0, 860.0])
+            .with_icon(icon),
         ..Default::default()
     };
 

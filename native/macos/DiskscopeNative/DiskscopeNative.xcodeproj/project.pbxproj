@@ -11,6 +11,7 @@
 		AA1100000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000002 /* ContentView.swift */; };
 		AA1100000000000000000003 /* NativeScanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000003 /* NativeScanStore.swift */; };
 		AA1100000000000000000004 /* TreemapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000004 /* TreemapView.swift */; };
+		AA1100000000000000000005 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000006 /* AppIcon.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		AA2200000000000000000003 /* NativeScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeScanStore.swift; sourceTree = "<group>"; };
 		AA2200000000000000000004 /* TreemapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapView.swift; sourceTree = "<group>"; };
 		AA2200000000000000000005 /* DiskscopeNative-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "DiskscopeNative-Bridging-Header.h"; sourceTree = "<group>"; };
+		AA2200000000000000000006 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,6 +51,7 @@
 				AA2200000000000000000003 /* NativeScanStore.swift */,
 				AA2200000000000000000004 /* TreemapView.swift */,
 				AA2200000000000000000005 /* DiskscopeNative-Bridging-Header.h */,
+				AA2200000000000000000006 /* AppIcon.icns */,
 			);
 			path = DiskscopeNative;
 			sourceTree = "<group>";
@@ -70,6 +73,7 @@
 			buildPhases = (
 				AA3300000000000000000002 /* Build Rust FFI */,
 				AA3300000000000000000003 /* Sources */,
+				AA3300000000000000000004 /* Resources */,
 				AA3300000000000000000001 /* Frameworks */,
 			);
 			buildRules = (
@@ -113,6 +117,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA3300000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA1100000000000000000005 /* AppIcon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		AA3300000000000000000002 /* Build Rust FFI */ = {
@@ -196,12 +211,12 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../../../crates/diskscope-ffi/include",
 				);
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_FILE = DiskscopeNative/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -228,12 +243,12 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../../../crates/diskscope-ffi/include",
 				);
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_FILE = DiskscopeNative/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

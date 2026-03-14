@@ -22,6 +22,7 @@ The project now ships as a dual-frontend system over one shared scan core:
 - `crates/diskscope-egui`: existing native Rust UI.
 - `crates/diskscope-ffi`: C ABI bridge used by native macOS app.
 - `native/macos/DiskscopeNative`: Xcode project for native macOS frontend.
+- `assets/icon.png`: shared source icon used by frontends (egui/native/web).
 
 ## Commands
 
