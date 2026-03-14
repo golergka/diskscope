@@ -11,7 +11,7 @@
 		AA1100000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000002 /* ContentView.swift */; };
 		AA1100000000000000000003 /* NativeScanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000003 /* NativeScanStore.swift */; };
 		AA1100000000000000000004 /* TreemapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000004 /* TreemapView.swift */; };
-		AA1100000000000000000005 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000006 /* AppIcon.icns */; };
+		AA1100000000000000000005 /* AppIconDock.icns in Resources */ = {isa = PBXBuildFile; fileRef = AA2200000000000000000006 /* AppIconDock.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,7 +21,7 @@
 		AA2200000000000000000003 /* NativeScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeScanStore.swift; sourceTree = "<group>"; };
 		AA2200000000000000000004 /* TreemapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreemapView.swift; sourceTree = "<group>"; };
 		AA2200000000000000000005 /* DiskscopeNative-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "DiskscopeNative-Bridging-Header.h"; sourceTree = "<group>"; };
-		AA2200000000000000000006 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		AA2200000000000000000006 /* AppIconDock.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIconDock.icns; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,7 +51,7 @@
 				AA2200000000000000000003 /* NativeScanStore.swift */,
 				AA2200000000000000000004 /* TreemapView.swift */,
 				AA2200000000000000000005 /* DiskscopeNative-Bridging-Header.h */,
-				AA2200000000000000000006 /* AppIcon.icns */,
+				AA2200000000000000000006 /* AppIconDock.icns */,
 			);
 			path = DiskscopeNative;
 			sourceTree = "<group>";
@@ -123,7 +123,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA1100000000000000000005 /* AppIcon.icns in Resources */,
+				AA1100000000000000000005 /* AppIconDock.icns in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

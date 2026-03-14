@@ -44,6 +44,7 @@ flowchart LR
 From repo root:
 
 ```bash
+cargo run -p diskscope -- clean-native
 cargo build -p diskscope-ffi --release
 xcodebuild \
   -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj \
@@ -53,6 +54,10 @@ xcodebuild \
   build
 cargo run -p diskscope -- ui-native --path / --start
 ```
+
+Notes:
+- `diskscope clean-native` removes stale native artifacts (`native/macos/DiskscopeNative/build` and local app copy).
+- `diskscope ui-native` chooses the freshest discovered `.app` bundle by timestamp, not first path match.
 
 ## Runtime behavior notes
 
@@ -79,6 +84,15 @@ cargo run -p diskscope -- ui-native --path / --start
 ### `ui-native` says app bundle not found
 
 Build using the exact command above with `-derivedDataPath native/macos/DiskscopeNative/build`.
+
+### `ui-native` launches an older native build
+
+Run a deterministic clean + rebuild:
+
+```bash
+cargo run -p diskscope -- clean-native
+xcodebuild -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj -scheme DiskscopeNative -configuration Debug -derivedDataPath native/macos/DiskscopeNative/build build
+```
 
 ### Linker cannot find `-ldiskscope_ffi`
 

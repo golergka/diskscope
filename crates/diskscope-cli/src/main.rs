@@ -1,8 +1,10 @@
 use diskscope_core::scanner;
 use diskscope_egui::app::{self, UiLaunchOptions};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -18,6 +20,7 @@ fn main() {
     match args[0].as_str() {
         "ui" => run_egui_ui(args.iter().skip(1).cloned().collect()),
         "ui-native" => run_native_ui(args.iter().skip(1).cloned().collect()),
+        "clean-native" => clean_native(args.iter().skip(1).cloned().collect()),
         "scan" => {
             let code = scanner::run_legacy_from_iter(args.into_iter().skip(1));
             if code != 0 {
@@ -118,6 +121,46 @@ fn run_native_ui(args: Vec<String>) {
     }
 }
 
+fn clean_native(args: Vec<String>) {
+    if let Some(other) = args
+        .iter()
+        .find(|arg| arg.as_str() != "-h" && arg.as_str() != "--help")
+    {
+        eprintln!("unknown clean-native flag: {other}");
+        std::process::exit(1);
+    }
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        print_top_usage();
+        return;
+    }
+
+    let mut removed_any = false;
+    for path in native_clean_paths() {
+        if !path.exists() {
+            continue;
+        }
+        let remove_result = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        match remove_result {
+            Ok(()) => {
+                removed_any = true;
+                println!("removed {}", path.display());
+            }
+            Err(error) => {
+                eprintln!("failed to remove {}: {error}", path.display());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if !removed_any {
+        println!("native artifacts already clean");
+    }
+}
+
 fn parse_native_args(args: &[String]) -> NativeArgs {
     let mut parsed = NativeArgs::default();
     let mut iter = args.iter();
@@ -154,27 +197,61 @@ fn discover_native_app_path() -> Option<PathBuf> {
         }
     }
 
-    candidate_native_app_paths()
+    let mut candidates: Vec<PathBuf> = candidate_native_app_paths()
         .into_iter()
-        .find(|path| path.exists())
+        .filter(|path| path.exists())
+        .collect();
+    candidates.sort_by(|lhs, rhs| native_app_freshness(rhs).cmp(&native_app_freshness(lhs)));
+    candidates.into_iter().next()
 }
 
 fn candidate_native_app_paths() -> Vec<PathBuf> {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let workspace_root = workspace_root();
 
     vec![
-        workspace_root.join("native/macos/DiskscopeNative/build/Release/DiskscopeNative.app"),
-        workspace_root.join("native/macos/DiskscopeNative/build/Debug/DiskscopeNative.app"),
         workspace_root
             .join("native/macos/DiskscopeNative/build/Build/Products/Release/DiskscopeNative.app"),
         workspace_root
             .join("native/macos/DiskscopeNative/build/Build/Products/Debug/DiskscopeNative.app"),
+        workspace_root.join("native/macos/DiskscopeNative/build/Release/DiskscopeNative.app"),
+        workspace_root.join("native/macos/DiskscopeNative/build/Debug/DiskscopeNative.app"),
         workspace_root.join("native/macos/DiskscopeNative/DiskscopeNative.app"),
         Path::new("/Applications/DiskscopeNative.app").to_path_buf(),
     ]
+}
+
+fn native_clean_paths() -> Vec<PathBuf> {
+    let workspace_root = workspace_root();
+    vec![
+        workspace_root.join("native/macos/DiskscopeNative/build"),
+        workspace_root.join("native/macos/DiskscopeNative/DiskscopeNative.app"),
+    ]
+}
+
+fn native_app_freshness(path: &Path) -> u128 {
+    native_app_timestamp(path)
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn native_app_timestamp(path: &Path) -> SystemTime {
+    file_modified(path.join("Contents/MacOS/DiskscopeNative"))
+        .or_else(|| file_modified(path.join("Contents/Info.plist")))
+        .or_else(|| file_modified(path.join("Contents/Resources/AppIconDock.icns")))
+        .or_else(|| file_modified(path.to_path_buf()))
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn file_modified(path: PathBuf) -> Option<SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
 
 fn print_top_usage() {
@@ -182,6 +259,7 @@ fn print_top_usage() {
     println!("  diskscope scan [PATH] [options]           Run CLI scanner");
     println!("  diskscope ui [--start] [--path PATH]      Launch egui frontend");
     println!("  diskscope ui-native [--start] [--path PATH] Launch native macOS app");
+    println!("  diskscope clean-native                     Remove native macOS build artifacts");
     println!();
     println!("CLI scan options:");
     scanner::print_legacy_usage();

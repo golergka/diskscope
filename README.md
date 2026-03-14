@@ -18,7 +18,7 @@ The project now ships as a dual-frontend system over one shared scan core:
 ## Workspace layout
 
 - `crates/diskscope-core`: scanner, model, events, volume logic.
-- `crates/diskscope-cli`: command dispatch (`scan`, `ui`, `ui-native`).
+- `crates/diskscope-cli`: command dispatch (`scan`, `ui`, `ui-native`, `clean-native`).
 - `crates/diskscope-egui`: existing native Rust UI.
 - `crates/diskscope-ffi`: C ABI bridge used by native macOS app.
 - `native/macos/DiskscopeNative`: Xcode project for native macOS frontend.
@@ -60,6 +60,14 @@ cargo run -p diskscope -- ui-native --path / --start
 
 If the app bundle is missing, CLI exits non-zero and prints deterministic build steps.
 
+### `diskscope clean-native`
+
+Removes local native macOS build artifacts so the next Xcode build is guaranteed fresh.
+
+```bash
+cargo run -p diskscope -- clean-native
+```
+
 ## Native macOS setup (`ui-native`)
 
 ### Prerequisites
@@ -73,6 +81,7 @@ If the app bundle is missing, CLI exits non-zero and prints deterministic build 
 From repo root:
 
 ```bash
+cargo run -p diskscope -- clean-native
 cargo build -p diskscope-ffi --release
 xcodebuild \
   -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj \
@@ -91,6 +100,8 @@ Then launch through CLI:
 ```bash
 cargo run -p diskscope -- ui-native --path / --start
 ```
+
+`ui-native` now picks the freshest discovered app bundle (based on app executable/plist timestamp) to avoid stale path selection.
 
 Optional app override path:
 
