@@ -94,6 +94,7 @@ fn run_native_ui(args: Vec<String>) {
             std::process::exit(1);
         }
     };
+    eprintln!("launching native app: {}", app_path.display());
 
     let mut cmd = Command::new("open");
     // Force launching the exact bundle path selected above, even if another

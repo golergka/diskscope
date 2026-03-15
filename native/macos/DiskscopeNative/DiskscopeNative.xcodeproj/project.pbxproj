@@ -231,7 +231,7 @@
 					"$(inherited)",
 					"-ldiskscope_ffi",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.diskscope.native;
+				PRODUCT_BUNDLE_IDENTIFIER = com.diskscope.native.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "DiskscopeNative/DiskscopeNative-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -263,7 +263,7 @@
 					"$(inherited)",
 					"-ldiskscope_ffi",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.diskscope.native;
+				PRODUCT_BUNDLE_IDENTIFIER = com.diskscope.native.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "DiskscopeNative/DiskscopeNative-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
