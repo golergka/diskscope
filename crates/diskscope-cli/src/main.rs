@@ -96,6 +96,9 @@ fn run_native_ui(args: Vec<String>) {
     };
 
     let mut cmd = Command::new("open");
+    // Force launching the exact bundle path selected above, even if another
+    // copy with the same bundle identifier is installed or already running.
+    cmd.arg("-n");
     cmd.arg(&app_path);
     if native_args.start || native_args.path.is_some() {
         cmd.arg("--args");
@@ -216,7 +219,6 @@ fn candidate_native_app_paths() -> Vec<PathBuf> {
         workspace_root.join("native/macos/DiskscopeNative/build/Release/DiskscopeNative.app"),
         workspace_root.join("native/macos/DiskscopeNative/build/Debug/DiskscopeNative.app"),
         workspace_root.join("native/macos/DiskscopeNative/DiskscopeNative.app"),
-        Path::new("/Applications/DiskscopeNative.app").to_path_buf(),
     ]
 }
 
