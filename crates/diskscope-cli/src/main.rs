@@ -163,6 +163,10 @@ fn clean_native(args: Vec<String>) {
     if !removed_any {
         println!("native artifacts already clean");
     }
+
+    if cfg!(target_os = "macos") {
+        reset_macos_icon_cache();
+    }
 }
 
 fn parse_native_args(args: &[String]) -> NativeArgs {
@@ -255,6 +259,53 @@ fn workspace_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
+}
+
+fn reset_macos_icon_cache() {
+    println!("resetting macOS icon caches...");
+
+    for pattern in [
+        "com.apple.dock.iconcache",
+        "com.apple.iconservices",
+        "com.apple.iconservicesagent",
+    ] {
+        let output = match Command::new("find")
+            .args(["/private/var/folders", "-name", pattern])
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("warning: failed to scan icon cache pattern {pattern}: {error}");
+                continue;
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for raw in stdout.lines() {
+            let path = PathBuf::from(raw);
+            if path.as_os_str().is_empty() {
+                continue;
+            }
+            let remove_result = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            if let Err(error) = remove_result {
+                eprintln!(
+                    "warning: failed to remove icon cache {}: {error}",
+                    path.display()
+                );
+            } else {
+                println!("removed {}", path.display());
+            }
+        }
+    }
+
+    let _ = Command::new("qlmanage").args(["-r", "cache"]).status();
+    for process in ["iconservicesagent", "Dock", "Finder"] {
+        let _ = Command::new("killall").arg(process).status();
+    }
 }
 
 fn print_top_usage() {
