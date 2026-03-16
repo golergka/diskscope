@@ -17,7 +17,7 @@ struct ContentView: View {
     }
 
     private var setupScreen: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("What to Scan")
                     .font(.headline)
@@ -38,7 +38,7 @@ struct ContentView: View {
                     }
                     .padding(6)
                 }
-                .frame(height: 130)
+                .frame(height: 112)
             }
 
             HStack(spacing: 10) {
@@ -99,7 +99,6 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func driveRow(for drive: NativeDriveInfo) -> some View {

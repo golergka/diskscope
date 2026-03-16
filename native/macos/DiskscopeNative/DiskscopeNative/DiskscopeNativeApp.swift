@@ -36,8 +36,8 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let targetMinSize: NSSize
         switch screen {
         case .setup:
-            targetContentSize = NSSize(width: 460, height: 320)
-            targetMinSize = NSSize(width: 420, height: 290)
+            targetContentSize = NSSize(width: 460, height: 255)
+            targetMinSize = NSSize(width: 420, height: 240)
         case .results:
             targetContentSize = NSSize(width: 1200, height: 760)
             targetMinSize = NSSize(width: 1080, height: 680)
@@ -98,7 +98,7 @@ struct DiskscopeNativeApp: App {
         Window("Diskscope Native", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 420, minHeight: 290)
+                .frame(minWidth: 420, minHeight: 240)
                 .onAppear {
                     appDelegate.bind(store: store)
                     appDelegate.attachMainWindowIfNeeded()
