@@ -13,7 +13,11 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard mainWindow == nil else {
             return
         }
-        guard let window = NSApp.windows.first else {
+        let candidate = NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0.isVisible })
+            ?? NSApp.windows.first
+        guard let window = candidate else {
             return
         }
         mainWindow = window
@@ -32,8 +36,8 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let targetMinSize: NSSize
         switch screen {
         case .setup:
-            targetContentSize = NSSize(width: 520, height: 420)
-            targetMinSize = NSSize(width: 460, height: 360)
+            targetContentSize = NSSize(width: 460, height: 320)
+            targetMinSize = NSSize(width: 420, height: 290)
         case .results:
             targetContentSize = NSSize(width: 1200, height: 760)
             targetMinSize = NSSize(width: 1080, height: 680)
@@ -94,11 +98,19 @@ struct DiskscopeNativeApp: App {
         Window("Diskscope Native", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 460, minHeight: 360)
+                .frame(minWidth: 420, minHeight: 290)
                 .onAppear {
                     appDelegate.bind(store: store)
                     appDelegate.attachMainWindowIfNeeded()
                     appDelegate.applyWindowLayout(for: store.currentScreen, animated: false)
+                    DispatchQueue.main.async {
+                        appDelegate.attachMainWindowIfNeeded()
+                        appDelegate.applyWindowLayout(for: store.currentScreen, animated: false)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        appDelegate.attachMainWindowIfNeeded()
+                        appDelegate.applyWindowLayout(for: store.currentScreen, animated: false)
+                    }
                 }
                 .onChange(of: store.currentScreen) { screen in
                     appDelegate.applyWindowLayout(for: screen)

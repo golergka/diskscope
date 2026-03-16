@@ -104,7 +104,7 @@ struct ContentView: View {
 
     private func driveRow(for drive: NativeDriveInfo) -> some View {
         let selected = !store.useCustomPath && store.selectedDrive == drive.path
-        let usedSummary = "\(store.driveUsedLabel(for: drive)) used"
+        let usedSummary = store.driveUsedLabel(for: drive)
         let totalSummary = store.driveTotalLabel(for: drive)
 
         return Button {
@@ -128,10 +128,10 @@ struct ContentView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(usedSummary)
+                    Text("\(usedSummary)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(totalSummary)
+                    Text("/ \(totalSummary)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
