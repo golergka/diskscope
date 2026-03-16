@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -199,6 +200,15 @@ struct ContentView: View {
                 store.rescan()
             }
             .disabled(!store.canRescan)
+
+            Button {
+                openWindow(id: "scan-errors")
+            } label: {
+                Image(systemName: "exclamationmark.bubble")
+            }
+            .help("Show scan errors")
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 
@@ -226,12 +236,15 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if store.errorNodeCount > 0 {
-                    Text("Errors: \(store.errorNodeCount)")
+                Button {
+                    openWindow(id: "scan-errors")
+                } label: {
+                    Text("Errors: \(store.totalErrorCount)")
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(store.totalErrorCount > 0 ? .red : .secondary)
                 }
+                .buttonStyle(.plain)
 
                 if store.deferredNodeCount > 0 {
                     Text("Deferred: \(store.deferredNodeCount)")
@@ -348,6 +361,80 @@ struct ContentView: View {
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct ScanErrorsView: View {
+    @EnvironmentObject var store: NativeScanStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Scan Errors")
+                    .font(.headline)
+                Spacer()
+                Text("\(store.totalErrorCount) total")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if store.totalErrorCount == 0 {
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.secondary)
+                    Text("No Errors")
+                        .font(.headline)
+                    Text("No scan errors have been reported for the current scan.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(store.errorEntries()) { entry in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(entry.kindLabel)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill(entry.kindLabel == "Runtime" ? Color.orange.opacity(0.18) : Color.red.opacity(0.18))
+                                    )
+                                Text(entry.location)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Text(entry.detail)
+                                .font(.body)
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                        if let nodeId = entry.nodeId {
+                            Button("Reveal") {
+                                store.focusOnErrorNode(nodeId)
+                                focusMainWindow()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .listStyle(.inset)
+            }
+        }
+        .padding(12)
+    }
+
+    private func focusMainWindow() {
+        if let mainWindow = NSApp.windows.first(where: { $0.title == "Diskscope Native" }) {
+            mainWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 

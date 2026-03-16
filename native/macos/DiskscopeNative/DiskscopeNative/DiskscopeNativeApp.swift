@@ -13,7 +13,8 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard mainWindow == nil else {
             return
         }
-        let candidate = NSApp.keyWindow
+        let candidate = NSApp.windows.first(where: { $0.title == "Diskscope Native" })
+            ?? NSApp.keyWindow
             ?? NSApp.mainWindow
             ?? NSApp.windows.first(where: { $0.isVisible })
             ?? NSApp.windows.first
@@ -84,6 +85,67 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 }
 
+private struct NativeAppCommands: Commands {
+    @ObservedObject var store: NativeScanStore
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("Select Folder…") {
+                store.selectFolderFromDialog()
+            }
+            .keyboardShortcut("o", modifiers: [.command])
+
+            Divider()
+
+            Button("Start Scan") {
+                store.startScan()
+            }
+            .disabled(!store.canStartScan)
+
+            Button("Cancel Scan") {
+                store.cancelScan()
+            }
+            .disabled(!store.canCancelScan)
+
+            Button("Rescan") {
+                store.rescan()
+            }
+            .disabled(!store.canRescan)
+
+            Divider()
+
+            Button("Close Window") {
+                NSApp.keyWindow?.performClose(nil)
+            }
+            .keyboardShortcut("w", modifiers: [.command])
+        }
+
+        CommandGroup(before: .toolbar) {
+            Button("Show Setup") {
+                store.showSetupScreen()
+            }
+
+            Button("Show Results") {
+                store.showResultsScreenIfAvailable()
+            }
+            .disabled(!store.canShowResultsScreen)
+
+            Button("Show Scan Errors") {
+                openWindow(id: "scan-errors")
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Reset Zoom") {
+                store.resetZoom()
+            }
+            .disabled(!store.canResetZoom)
+        }
+    }
+}
+
 @main
 struct DiskscopeNativeApp: App {
     @NSApplicationDelegateAdaptor(NativeAppDelegate.self) private var appDelegate
@@ -117,54 +179,12 @@ struct DiskscopeNativeApp: App {
                 }
         }
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Select Folder…") {
-                    store.selectFolderFromDialog()
-                }
-                .keyboardShortcut("o", modifiers: [.command])
-
-                Divider()
-
-                Button("Start Scan") {
-                    store.startScan()
-                }
-                .disabled(!store.canStartScan)
-
-                Button("Cancel Scan") {
-                    store.cancelScan()
-                }
-                .disabled(!store.canCancelScan)
-
-                Button("Rescan") {
-                    store.rescan()
-                }
-                .disabled(!store.canRescan)
-
-                Divider()
-
-                Button("Close Window") {
-                    NSApp.keyWindow?.performClose(nil)
-                }
-                .keyboardShortcut("w", modifiers: [.command])
-            }
-
-            CommandGroup(before: .toolbar) {
-                Button("Show Setup") {
-                    store.showSetupScreen()
-                }
-
-                Button("Show Results") {
-                    store.showResultsScreenIfAvailable()
-                }
-                .disabled(!store.canShowResultsScreen)
-
-                Divider()
-
-                Button("Reset Zoom") {
-                    store.resetZoom()
-                }
-                .disabled(!store.canResetZoom)
-            }
+            NativeAppCommands(store: store)
+        }
+        Window("Scan Errors", id: "scan-errors") {
+            ScanErrorsView()
+                .environmentObject(store)
+                .frame(minWidth: 720, minHeight: 460)
         }
     }
 }

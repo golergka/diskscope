@@ -157,6 +157,20 @@ struct NativeDriveInfo: Hashable, Identifiable {
     var id: String { path }
 }
 
+struct NativeRuntimeErrorEntry: Identifiable, Hashable {
+    let id: UUID
+    let timestamp: Date
+    let message: String
+}
+
+struct NativeScanErrorEntry: Identifiable, Hashable {
+    let id: String
+    let kindLabel: String
+    let location: String
+    let detail: String
+    let nodeId: UInt64?
+}
+
 struct NativeNode {
     var id: UInt64
     var parentId: UInt64?
@@ -346,7 +360,9 @@ final class NativeScanStore: ObservableObject {
     @Published private(set) var pendingPatchBacklog: Int = 0
     @Published private(set) var errorNodeCount: Int = 0
     @Published private(set) var deferredNodeCount: Int = 0
+    @Published private(set) var runtimeErrors: [NativeRuntimeErrorEntry] = []
     private var childOrderRevisions: [UInt64: UInt64] = [:]
+    private var errorNodeIds: Set<UInt64> = []
 
     private var session: DsSessionHandleRef?
     private var pendingPatches: [IncomingPatch] = []
@@ -354,6 +370,7 @@ final class NativeScanStore: ObservableObject {
     private var patchFlushScheduled = false
     private let patchFlushIntervalSeconds: TimeInterval = 0.1
     private let patchFlushTimeBudgetSeconds: TimeInterval = 0.012
+    private let maxRuntimeErrorEntries = 200
     private var pendingTerminalEvent: PendingTerminalEvent?
     private var ffiAbiCompatible = true
     private let dockProgress = DockProgressOverlayController()
@@ -381,6 +398,7 @@ final class NativeScanStore: ObservableObject {
             scanState = .failed("FFI ABI mismatch")
             statusLine = "FFI ABI mismatch: native=\(runtimeAbi), expected=\(kExpectedAbiVersion)"
             NativeDiagnostics.warning("ffi_abi_mismatch native=\(runtimeAbi) expected=\(kExpectedAbiVersion)")
+            appendRuntimeError(statusLine)
         }
 
         if launch.autoStart {
@@ -427,6 +445,10 @@ final class NativeScanStore: ObservableObject {
 
     var canShowResultsScreen: Bool {
         appMode == .scanResults
+    }
+
+    var totalErrorCount: Int {
+        errorNodeCount + runtimeErrors.count
     }
 
     var scannedBytesLabel: String {
@@ -743,6 +765,59 @@ final class NativeScanStore: ObservableObject {
         }
     }
 
+    func errorEntries() -> [NativeScanErrorEntry] {
+        var nodeEntries: [NativeScanErrorEntry] = errorNodeIds.compactMap { nodeId in
+            guard let node = nodes[nodeId] else {
+                return nil
+            }
+            let detail: String
+            switch node.kind {
+            case .directory, .collapsedDirectory:
+                detail = "Directory could not be fully read (permission denied or read error)."
+            case .file:
+                detail = "File metadata could not be fully read (permission denied or read error)."
+            }
+            return NativeScanErrorEntry(
+                id: "node-\(nodeId)",
+                kindLabel: "Node",
+                location: path(for: nodeId),
+                detail: detail,
+                nodeId: nodeId
+            )
+        }
+        nodeEntries.sort { lhs, rhs in
+            lhs.location.localizedCaseInsensitiveCompare(rhs.location) == .orderedAscending
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        let runtimeEntries: [NativeScanErrorEntry] = runtimeErrors.reversed().map { runtime in
+            NativeScanErrorEntry(
+                id: "runtime-\(runtime.id.uuidString)",
+                kindLabel: "Runtime",
+                location: formatter.string(from: runtime.timestamp),
+                detail: runtime.message,
+                nodeId: nil
+            )
+        }
+
+        return runtimeEntries + nodeEntries
+    }
+
+    func focusOnErrorNode(_ nodeId: UInt64) {
+        guard nodes[nodeId] != nil else {
+            return
+        }
+        showResultsScreen()
+        var cursor: UInt64? = nodeId
+        while let id = cursor {
+            expandedNodes.insert(id)
+            cursor = nodes[id]?.parentId
+        }
+        selectedNodeId = nodeId
+    }
+
     func receive(event: DsScanEvent) {
         let decoded = decode(event: event)
         DispatchQueue.main.async {
@@ -856,6 +931,7 @@ final class NativeScanStore: ObservableObject {
 
         case .error(let message):
             pendingTerminalEvent = .error(message)
+            appendRuntimeError(message)
             NativeDiagnostics.warning("scan_error_event message=\(message)")
             schedulePatchFlush()
         }
@@ -995,8 +1071,10 @@ final class NativeScanStore: ObservableObject {
         if previousErrorFlag != patch.errorFlag {
             if patch.errorFlag {
                 errorNodeCount += 1
+                errorNodeIds.insert(patch.id)
             } else {
                 errorNodeCount = max(0, errorNodeCount - 1)
+                errorNodeIds.remove(patch.id)
             }
         }
 
@@ -1057,6 +1135,8 @@ final class NativeScanStore: ObservableObject {
         pendingPatchBacklog = 0
         errorNodeCount = 0
         deferredNodeCount = 0
+        runtimeErrors.removeAll(keepingCapacity: true)
+        errorNodeIds.removeAll(keepingCapacity: true)
         rootNodeId = 0
         selectedNodeId = 0
         zoomNodeId = 0
@@ -1084,6 +1164,22 @@ final class NativeScanStore: ObservableObject {
 
     private func refreshPendingPatchBacklog() {
         pendingPatchBacklog = max(0, pendingPatches.count - pendingPatchCursor)
+    }
+
+    private func appendRuntimeError(_ message: String) {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return
+        }
+        runtimeErrors.append(NativeRuntimeErrorEntry(
+            id: UUID(),
+            timestamp: Date(),
+            message: normalized
+        ))
+        let overflow = runtimeErrors.count - maxRuntimeErrorEntries
+        if overflow > 0 {
+            runtimeErrors.removeFirst(overflow)
+        }
     }
 
     private func teardownSession(cancel: Bool, synchronous: Bool) {

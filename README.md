@@ -150,6 +150,7 @@ Native macOS frontend currently includes:
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.
 - top bar shows scanned / occupied / capacity plus live `Error` and `Deferred` counters.
+- dedicated native `Scan Errors` window (open from results toolbar or app menu) to review accumulated node/runtime errors.
 - native lifecycle behavior:
   - single main window.
   - app stays alive when window closes.

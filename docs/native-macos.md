@@ -80,6 +80,7 @@ Notes:
 - Root node size updates incrementally (`Partial`) while workers complete subtrees.
 - During scan, treemap relayout is throttled and adaptive (`~1-3s`) using patch-backlog signals.
 - Top bar exposes aggregate `Error` and `Deferred` counts so incomplete coverage is explicit.
+- Errors can be reviewed in a dedicated `Scan Errors` window (results button or `Show Scan Errors` menu command).
 - App lifecycle:
   - single main window.
   - closing window does not quit app.
@@ -87,7 +88,7 @@ Notes:
   - Dock icon shows a progress bar overlay while scanning and clears on terminal states.
 - Menus:
   - File: `Select Folder…`, `Start Scan`, `Cancel Scan`, `Rescan`, `Close Window`.
-  - View: `Show Setup`, `Show Results`, `Reset Zoom`.
+  - View: `Show Setup`, `Show Results`, `Show Scan Errors`, `Reset Zoom`.
   - Window menu remains standard macOS window commands.
 
 ## Xcode target notes
