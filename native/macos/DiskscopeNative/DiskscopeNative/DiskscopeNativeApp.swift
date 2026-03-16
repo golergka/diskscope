@@ -4,15 +4,14 @@ import SwiftUI
 final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     weak var store: NativeScanStore?
     private weak var mainWindow: NSWindow?
+    private var lockedContentSize: NSSize?
+    private var isApplyingSizeLock = false
 
     func bind(store: NativeScanStore) {
         self.store = store
     }
 
     func attachMainWindowIfNeeded() {
-        guard mainWindow == nil else {
-            return
-        }
         let candidate = NSApp.windows.first(where: { $0.title == "Diskscope Native" })
             ?? NSApp.keyWindow
             ?? NSApp.mainWindow
@@ -21,7 +20,9 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let window = candidate else {
             return
         }
-        mainWindow = window
+        if mainWindow !== window {
+            mainWindow = window
+        }
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         enforceFixedSizing(for: window)
@@ -39,12 +40,13 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         case .setup:
             targetContentSize = NSSize(
                 width: 460,
-                height: (store?.showAdvanced ?? false) ? 356 : 320
+                height: (store?.showAdvanced ?? false) ? 430 : 388
             )
         case .results:
             targetContentSize = NSSize(width: 1200, height: 760)
         }
 
+        lockedContentSize = targetContentSize
         window.contentMinSize = targetContentSize
         window.contentMaxSize = targetContentSize
         enforceFixedSizing(for: window)
@@ -66,12 +68,42 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func enforceFixedSizing(for window: NSWindow) {
-        if window.styleMask.contains(.resizable) {
-            window.styleMask.remove(.resizable)
+        let keepFullSize = window.styleMask.contains(.fullSizeContentView)
+        var style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
+        if keepFullSize {
+            style.insert(.fullSizeContentView)
         }
+        window.styleMask = style
         if let zoomButton = window.standardWindowButton(.zoomButton) {
             zoomButton.isEnabled = false
         }
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let lockedContentSize else {
+            return sender.frame.size
+        }
+        let frameRect = sender.frameRect(forContentRect: NSRect(origin: .zero, size: lockedContentSize))
+        return frameRect.size
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard !isApplyingSizeLock,
+              let window = notification.object as? NSWindow,
+              window === mainWindow,
+              let lockedContentSize else {
+            return
+        }
+
+        let current = window.contentRect(forFrameRect: window.frame).size
+        let delta = abs(current.width - lockedContentSize.width) + abs(current.height - lockedContentSize.height)
+        guard delta > 0.5 else {
+            return
+        }
+
+        isApplyingSizeLock = true
+        window.setContentSize(lockedContentSize)
+        isApplyingSizeLock = false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -172,7 +204,7 @@ struct DiskscopeNativeApp: App {
         Window("Diskscope Native", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 460, minHeight: 320)
+                .frame(minWidth: 460, minHeight: 352)
                 .onAppear {
                     appDelegate.bind(store: store)
                     appDelegate.attachMainWindowIfNeeded()
@@ -196,6 +228,7 @@ struct DiskscopeNativeApp: App {
                     appDelegate.applyWindowLayout(for: .setup)
                 }
         }
+        .windowResizability(.contentSize)
         .commands {
             NativeAppCommands(store: store)
         }

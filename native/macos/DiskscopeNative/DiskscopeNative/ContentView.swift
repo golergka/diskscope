@@ -142,7 +142,7 @@ struct ContentView: View {
 
     private var setupDriveListHeight: CGFloat {
         let visibleRows = max(2, min(store.availableDrives.count, 4))
-        return CGFloat(visibleRows) * 38 + 12
+        return CGFloat(visibleRows) * 48 + 12
     }
 
     private var setupTargetSummary: some View {
