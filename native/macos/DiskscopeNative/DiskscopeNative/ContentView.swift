@@ -5,8 +5,162 @@ struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
 
     var body: some View {
+        Group {
+            switch store.currentScreen {
+            case .setup:
+                setupScreen
+            case .results:
+                resultsScreen
+            }
+        }
+        .padding(12)
+    }
+
+    private var setupScreen: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("What to Scan")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                if store.canShowResultsScreen {
+                    Button("Show Results") {
+                        store.showResultsScreenIfAvailable()
+                    }
+                }
+            }
+
+            Text("Choose a mounted drive or a specific folder, then start scan.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(store.availableDrives) { drive in
+                        driveCard(for: drive)
+                    }
+                }
+            }
+            .frame(minHeight: 220)
+
+            setupTargetSummary
+
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Profile", selection: $store.profile) {
+                    ForEach(NativeProfile.allCases) { profile in
+                        Text(profile.title).tag(profile)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 170)
+
+                Toggle("Advanced Tuning", isOn: $store.showAdvanced)
+                    .toggleStyle(.checkbox)
+
+                if store.showAdvanced {
+                    HStack(spacing: 10) {
+                        TextField("Workers (override)", text: $store.workerOverrideText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 170)
+                        TextField("Queue limit", text: $store.queueLimitText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 140)
+                        TextField("Threshold bytes", text: $store.thresholdOverrideText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 170)
+                        Spacer()
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button("Select Folder…") {
+                    store.selectFolderFromDialog()
+                }
+                Spacer()
+                Button("Start Scan") {
+                    store.startScan()
+                }
+                .disabled(!store.canStartScan)
+                .keyboardShortcut(.return, modifiers: [])
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func driveCard(for drive: NativeDriveInfo) -> some View {
+        let selected = !store.useCustomPath && store.selectedDrive == drive.path
+
+        return Button {
+            store.setDriveTarget(path: drive.path)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(drive.displayName, systemImage: "internaldrive")
+                        .font(.headline)
+                    Spacer()
+                    Text(drive.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 16) {
+                    Label("Capacity \(store.driveTotalLabel(for: drive))", systemImage: "externaldrive")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Label("Used \(store.driveUsedLabel(for: drive))", systemImage: "chart.pie")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Label("Free \(store.driveFreeLabel(for: drive))", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.2) : Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        selected ? Color.accentColor : Color(nsColor: .separatorColor),
+                        lineWidth: selected ? 2 : 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var setupTargetSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Target")
+                .font(.headline)
+
+            if store.useCustomPath {
+                Label(store.customPath, systemImage: "folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Path", text: $store.customPath)
+                    .textFieldStyle(.roundedBorder)
+            } else if let drive = store.selectedDriveInfo {
+                Label("\(drive.displayName) (\(drive.path))", systemImage: "internaldrive")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(store.activePath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var resultsScreen: some View {
         VStack(spacing: 10) {
-            controlBar
+            resultsActions
             progressBar
 
             HSplitView {
@@ -16,68 +170,30 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(12)
     }
 
-    private var controlBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                Picker("Drive", selection: $store.selectedDrive) {
-                    ForEach(store.availableDrives, id: \.self) { drive in
-                        Text(drive).tag(drive)
-                    }
-                }
-                .labelsHidden()
-                .frame(minWidth: 220)
+    private var resultsActions: some View {
+        HStack(spacing: 10) {
+            Label(store.activePath, systemImage: store.useCustomPath ? "folder" : "internaldrive")
+                .font(.subheadline)
+                .lineLimit(1)
 
-                Toggle("Custom path", isOn: $store.useCustomPath)
-                    .toggleStyle(.checkbox)
+            Spacer()
 
-                if store.useCustomPath {
-                    TextField("Path", text: $store.customPath)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 260)
-                }
-
-                Picker("Profile", selection: $store.profile) {
-                    ForEach(NativeProfile.allCases) { profile in
-                        Text(profile.title).tag(profile)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 170)
-
-                Toggle("Advanced", isOn: $store.showAdvanced)
-                    .toggleStyle(.checkbox)
-
-                Spacer()
-
-                Button("Start") {
-                    store.startScan()
-                }
-                Button("Cancel") {
-                    store.cancelScan()
-                }
-                .disabled(store.scanState != .running)
-                Button("Rescan") {
-                    store.rescan()
-                }
+            Button("Change Target") {
+                store.changeTarget()
             }
+            .disabled(store.scanState == .running)
 
-            if store.showAdvanced {
-                HStack(spacing: 10) {
-                    TextField("Workers (override)", text: $store.workerOverrideText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 170)
-                    TextField("Queue limit", text: $store.queueLimitText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                    TextField("Threshold bytes", text: $store.thresholdOverrideText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 170)
-                    Spacer()
-                }
+            Button("Cancel") {
+                store.cancelScan()
             }
+            .disabled(!store.canCancelScan)
+
+            Button("Rescan") {
+                store.rescan()
+            }
+            .disabled(!store.canRescan)
         }
     }
 

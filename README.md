@@ -58,6 +58,10 @@ cargo run -p diskscope -- ui-native
 cargo run -p diskscope -- ui-native --path / --start
 ```
 
+Behavior:
+- default launch opens **Setup** ("What to Scan").
+- `--start --path PATH` opens **Results** immediately and starts scanning.
+
 If the app bundle is missing, CLI exits non-zero and prints deterministic build steps.
 
 ### `diskscope clean-native`
@@ -131,6 +135,9 @@ Implemented in shared scan core:
 
 Native macOS frontend currently includes:
 
+- explicit two-screen flow:
+  - **Setup**: drive cards with Capacity/Used/Free stats + `Select Folder…` target picker.
+  - **Results**: progress/status + hierarchy tree + treemap.
 - drive selection and optional custom path.
 - start/cancel/rescan and profile/tuning controls.
 - real-time progress from core events.
@@ -143,6 +150,12 @@ Native macOS frontend currently includes:
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.
 - top bar shows scanned / occupied / capacity plus live `Error` and `Deferred` counters.
+- native lifecycle behavior:
+  - single main window.
+  - app stays alive when window closes.
+  - Dock reopen restores Setup or Results based on app mode.
+  - Dock badge shows scan progress percent while scanning.
+- top menu commands for scan actions (`Select Folder`, `Start`, `Cancel`, `Rescan`, `Show Setup/Results`, `Reset Zoom`).
 - optional runtime diagnostics via `DISKSCOPE_NATIVE_TRACE=1` (logs slow patch flush, outline refresh/selection sync, treemap relayout/draw FPS to unified macOS logs).
 
 Known limitations:

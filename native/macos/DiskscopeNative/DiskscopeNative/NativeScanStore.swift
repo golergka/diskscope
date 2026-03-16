@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 import SwiftUI
@@ -136,6 +137,26 @@ enum NativeScanState: Equatable {
     }
 }
 
+enum NativeScreen {
+    case setup
+    case results
+}
+
+enum NativeAppMode {
+    case choosingTarget
+    case scanResults
+}
+
+struct NativeDriveInfo: Hashable, Identifiable {
+    let path: String
+    let displayName: String
+    let totalBytes: UInt64?
+    let usedBytes: UInt64?
+    let freeBytes: UInt64?
+
+    var id: String { path }
+}
+
 struct NativeNode {
     var id: UInt64
     var parentId: UInt64?
@@ -217,10 +238,12 @@ private let ffiEventCallback: DsScanEventCallback = { eventPtr, userData in
 }
 
 final class NativeScanStore: ObservableObject {
-    @Published var availableDrives: [String]
+    @Published var availableDrives: [NativeDriveInfo]
     @Published var selectedDrive: String
     @Published var useCustomPath: Bool = false
     @Published var customPath: String = "/"
+    @Published var currentScreen: NativeScreen = .setup
+    @Published private(set) var appMode: NativeAppMode = .choosingTarget
     @Published var scanState: NativeScanState = .idle
     @Published var statusLine: String = "Ready"
     @Published var progress: NativeProgress = NativeProgress()
@@ -255,12 +278,12 @@ final class NativeScanStore: ObservableObject {
 
         let discoveredDrives = NativeScanStore.discoverDrives()
         availableDrives = discoveredDrives
-        selectedDrive = discoveredDrives.first ?? "/"
+        selectedDrive = discoveredDrives.first?.path ?? "/"
 
         if let override = launch.pathOverride, !override.isEmpty {
             customPath = override
             useCustomPath = true
-            if availableDrives.contains(override) {
+            if availableDrives.contains(where: { $0.path == override }) {
                 selectedDrive = override
                 useCustomPath = false
             }
@@ -275,9 +298,14 @@ final class NativeScanStore: ObservableObject {
         }
 
         if launch.autoStart {
+            appMode = .scanResults
+            currentScreen = .results
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self.startScan()
             }
+        } else {
+            appMode = .choosingTarget
+            currentScreen = .setup
         }
     }
 
@@ -288,6 +316,30 @@ final class NativeScanStore: ObservableObject {
     var activePath: String {
         let source = useCustomPath ? customPath : selectedDrive
         return source.isEmpty ? "/" : source
+    }
+
+    var selectedDriveInfo: NativeDriveInfo? {
+        availableDrives.first(where: { $0.path == selectedDrive })
+    }
+
+    var canStartScan: Bool {
+        scanState != .running && ffiAbiCompatible
+    }
+
+    var canCancelScan: Bool {
+        scanState == .running && session != nil
+    }
+
+    var canRescan: Bool {
+        scanState != .running && ffiAbiCompatible
+    }
+
+    var canResetZoom: Bool {
+        zoomNodeId != rootNodeId
+    }
+
+    var canShowResultsScreen: Bool {
+        appMode == .scanResults
     }
 
     var scannedBytesLabel: String {
@@ -324,10 +376,84 @@ final class NativeScanStore: ObservableObject {
         return Double(scanned) / Double(denominator)
     }
 
+    func showSetupScreen() {
+        appMode = .choosingTarget
+        currentScreen = .setup
+    }
+
+    func showResultsScreen() {
+        appMode = .scanResults
+        currentScreen = .results
+    }
+
+    func showResultsScreenIfAvailable() {
+        guard appMode == .scanResults else {
+            return
+        }
+        currentScreen = .results
+    }
+
+    func handleDockReopen() {
+        currentScreen = appMode == .choosingTarget ? .setup : .results
+    }
+
+    func changeTarget() {
+        showSetupScreen()
+    }
+
+    func setDriveTarget(path: String) {
+        selectedDrive = path
+        useCustomPath = false
+        showSetupScreen()
+    }
+
+    func setCustomTarget(path: String) {
+        customPath = path
+        useCustomPath = true
+        showSetupScreen()
+    }
+
+    func selectFolderFromDialog() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Folder to Scan"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: activePath)
+        if panel.runModal() == .OK, let url = panel.url {
+            setCustomTarget(path: url.path)
+        }
+    }
+
+    func driveTotalLabel(for drive: NativeDriveInfo) -> String {
+        guard let totalBytes = drive.totalBytes else {
+            return "Unavailable"
+        }
+        return NativeScanStore.humanBytes(totalBytes)
+    }
+
+    func driveUsedLabel(for drive: NativeDriveInfo) -> String {
+        guard let usedBytes = drive.usedBytes else {
+            return "Unavailable"
+        }
+        return NativeScanStore.humanBytes(usedBytes)
+    }
+
+    func driveFreeLabel(for drive: NativeDriveInfo) -> String {
+        guard let freeBytes = drive.freeBytes else {
+            return "Unavailable"
+        }
+        return NativeScanStore.humanBytes(freeBytes)
+    }
+
     func startScan() {
+        showResultsScreen()
         guard ffiAbiCompatible else {
             scanState = .failed("FFI ABI mismatch")
             statusLine = "FFI ABI mismatch. Rebuild native app + Rust FFI together."
+            updateDockTileProgress()
             return
         }
 
@@ -339,6 +465,7 @@ final class NativeScanStore: ObservableObject {
         resetModel(path: canonical)
         scanState = .running
         statusLine = "Starting scan for \(canonical)..."
+        updateDockTileProgress()
 
         var request = DsScanRequest(
             root_path: nil,
@@ -364,6 +491,7 @@ final class NativeScanStore: ObservableObject {
             scanState = .failed("Unable to start native scan session")
             statusLine = "Failed to start scan"
             NativeDiagnostics.warning("scan_start_failed path=\(canonical)")
+            updateDockTileProgress()
             return
         }
 
@@ -378,6 +506,7 @@ final class NativeScanStore: ObservableObject {
         scanState = .cancelled
         statusLine = "Cancelling scan..."
         NativeDiagnostics.info("scan_cancel_requested")
+        updateDockTileProgress()
         teardownSession(cancel: true, synchronous: false)
     }
 
@@ -626,6 +755,7 @@ final class NativeScanStore: ObservableObject {
         case .progress(let incoming):
             progress = incoming
             statusLine = "Scanning \(scannedBytesLabel) of \(occupiedBytesLabel) occupied"
+            updateDockTileProgress()
 
         case .completed:
             pendingTerminalEvent = .completed
@@ -738,6 +868,7 @@ final class NativeScanStore: ObservableObject {
             NativeDiagnostics.warning("scan_terminal error=\(message)")
         }
 
+        updateDockTileProgress()
         teardownSession(cancel: false, synchronous: false)
     }
 
@@ -892,23 +1023,100 @@ final class NativeScanStore: ObservableObject {
         childOrderRevisions[nodeId] = (childOrderRevisions[nodeId] ?? 0) &+ 1
     }
 
-    private static func discoverDrives() -> [String] {
-        var drives: [String] = ["/"]
+    private func updateDockTileProgress() {
+        let badge: String?
+        if scanState == .running {
+            let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+            if denominator == 0 {
+                badge = "…"
+            } else {
+                let scanned = min(progress.bytesSeen, denominator)
+                let fraction = max(0.0, min(1.0, Double(scanned) / Double(denominator)))
+                let percent = Int((fraction * 100).rounded())
+                badge = "\(percent)%"
+            }
+        } else {
+            badge = nil
+        }
 
-        let keys: [URLResourceKey] = [.volumeNameKey, .isDirectoryKey]
-        if let mounted = FileManager.default.mountedVolumeURLs(
+        if NSApp.dockTile.badgeLabel != badge {
+            NSApp.dockTile.badgeLabel = badge
+            NSApp.dockTile.display()
+        }
+    }
+
+    private static func discoverDrives() -> [NativeDriveInfo] {
+        let fileManager = FileManager.default
+        let keys: [URLResourceKey] = [
+            .volumeNameKey,
+            .volumeLocalizedNameKey,
+            .isDirectoryKey
+        ]
+
+        var seen: Set<String> = []
+        var drives: [NativeDriveInfo] = []
+
+        func appendDrive(path: String, url: URL?) {
+            guard seen.insert(path).inserted else {
+                return
+            }
+
+            let stats = fileSystemStats(path: path)
+            let resolvedURL = url ?? URL(fileURLWithPath: path)
+            let resource = try? resolvedURL.resourceValues(forKeys: Set(keys))
+            let displayName = resource?.volumeLocalizedName
+                ?? resource?.volumeName
+                ?? displayName(path: path)
+
+            drives.append(
+                NativeDriveInfo(
+                    path: path,
+                    displayName: displayName,
+                    totalBytes: stats.totalBytes,
+                    usedBytes: stats.usedBytes,
+                    freeBytes: stats.freeBytes
+                )
+            )
+        }
+
+        appendDrive(path: "/", url: URL(fileURLWithPath: "/"))
+
+        if let mounted = fileManager.mountedVolumeURLs(
             includingResourceValuesForKeys: keys,
             options: [.skipHiddenVolumes]
         ) {
-            for url in mounted {
-                let path = url.path
-                if !drives.contains(path) {
-                    drives.append(path)
-                }
+            for url in mounted.sorted(by: { $0.path < $1.path }) {
+                appendDrive(path: url.path, url: url)
             }
         }
 
+        drives.sort { lhs, rhs in
+            if lhs.path == "/" {
+                return true
+            }
+            if rhs.path == "/" {
+                return false
+            }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
         return drives
+    }
+
+    private static func fileSystemStats(path: String) -> (
+        totalBytes: UInt64?,
+        usedBytes: UInt64?,
+        freeBytes: UInt64?
+    ) {
+        guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: path) else {
+            return (nil, nil, nil)
+        }
+
+        let total = (attributes[.systemSize] as? NSNumber)?.uint64Value
+        let free = (attributes[.systemFreeSize] as? NSNumber)?.uint64Value
+        if let total, let free, total >= free {
+            return (total, total - free, free)
+        }
+        return (total, nil, free)
     }
 
     private static func displayName(path: String) -> String {

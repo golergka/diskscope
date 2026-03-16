@@ -8,6 +8,21 @@
 - `diskscope ui-native` launches `DiskscopeNative.app`.
 - Both consume shared Rust scan semantics from `diskscope-core`.
 
+## Screen model
+
+- Setup screen:
+  - choose mounted drive from native cards.
+  - view per-drive `Capacity / Used / Free`.
+  - optionally choose custom folder (`Select Folder…`).
+  - set profile and advanced tuning before scan.
+- Results screen:
+  - progress/status.
+  - collapsible hierarchy + treemap panes.
+  - actions: `Cancel`, `Rescan`, `Change Target`.
+- launch routing:
+  - `ui-native` => Setup.
+  - `ui-native --start --path PATH` => Results + immediate scan.
+
 ## Architecture
 
 ```mermaid
@@ -65,6 +80,15 @@ Notes:
 - Root node size updates incrementally (`Partial`) while workers complete subtrees.
 - During scan, treemap relayout is throttled and adaptive (`~1-3s`) using patch-backlog signals.
 - Top bar exposes aggregate `Error` and `Deferred` counts so incomplete coverage is explicit.
+- App lifecycle:
+  - single main window.
+  - closing window does not quit app.
+  - Dock reopen restores the main window and routes to Setup or Results by app mode.
+  - Dock badge shows scan progress percent while scanning and clears on terminal states.
+- Menus:
+  - File: `Select Folder…`, `Start Scan`, `Cancel Scan`, `Rescan`, `Close Window`.
+  - View: `Show Setup`, `Show Results`, `Reset Zoom`.
+  - Window menu remains standard macOS window commands.
 
 ## Xcode target notes
 
