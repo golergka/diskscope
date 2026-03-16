@@ -48,14 +48,8 @@ struct ContentView: View {
                 if store.useCustomPath {
                     TextField("Path", text: $store.customPath)
                         .textFieldStyle(.roundedBorder)
-                } else {
-                    Button("Use Selected Drive") {
-                        if let drive = store.selectedDriveInfo {
-                            store.setDriveTarget(path: drive.path)
-                        }
-                    }
-                    .disabled(store.selectedDriveInfo == nil)
                 }
+                Spacer()
             }
 
             setupTargetSummary
