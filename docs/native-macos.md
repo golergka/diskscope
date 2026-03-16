@@ -84,7 +84,7 @@ Notes:
   - single main window.
   - closing window does not quit app.
   - Dock reopen restores the main window and routes to Setup or Results by app mode.
-  - Dock badge shows scan progress percent while scanning and clears on terminal states.
+  - Dock icon shows a progress bar overlay while scanning and clears on terminal states.
 - Menus:
   - File: `Select Folder…`, `Start Scan`, `Cancel Scan`, `Rescan`, `Close Window`.
   - View: `Show Setup`, `Show Results`, `Reset Zoom`.

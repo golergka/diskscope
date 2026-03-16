@@ -154,7 +154,7 @@ Native macOS frontend currently includes:
   - single main window.
   - app stays alive when window closes.
   - Dock reopen restores Setup or Results based on app mode.
-  - Dock badge shows scan progress percent while scanning.
+  - Dock icon shows a native progress bar overlay while scanning.
 - top menu commands for scan actions (`Select Folder`, `Start`, `Cancel`, `Rescan`, `Show Setup/Results`, `Reset Zoom`).
 - optional runtime diagnostics via `DISKSCOPE_NATIVE_TRACE=1` (logs slow patch flush, outline refresh/selection sync, treemap relayout/draw FPS to unified macOS logs).
 

@@ -137,12 +137,12 @@ enum NativeScanState: Equatable {
     }
 }
 
-enum NativeScreen {
+enum NativeScreen: Equatable {
     case setup
     case results
 }
 
-enum NativeAppMode {
+enum NativeAppMode: Equatable {
     case choosingTarget
     case scanResults
 }
@@ -237,6 +237,91 @@ private let ffiEventCallback: DsScanEventCallback = { eventPtr, userData in
     store.receive(event: eventPtr.pointee)
 }
 
+private final class DockProgressOverlayController {
+    private final class ProgressTileView: NSView {
+        var fraction: Double = 0 {
+            didSet {
+                needsDisplay = true
+            }
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            guard let context = NSGraphicsContext.current?.cgContext else {
+                return
+            }
+
+            let boundsRect = bounds
+            if let iconImage = NSApp.applicationIconImage {
+                iconImage.draw(in: boundsRect)
+            } else {
+                NSImage(named: NSImage.applicationIconName)?.draw(in: boundsRect)
+            }
+
+            let clamped = max(0, min(1, fraction))
+            let horizontalInset = boundsRect.width * 0.12
+            let barHeight = max(7, boundsRect.height * 0.075)
+            let barRect = NSRect(
+                x: horizontalInset,
+                y: boundsRect.height * 0.09,
+                width: boundsRect.width - horizontalInset * 2,
+                height: barHeight
+            )
+
+            let trackPath = NSBezierPath(roundedRect: barRect, xRadius: barHeight / 2, yRadius: barHeight / 2)
+            NSColor.black.withAlphaComponent(0.55).setFill()
+            trackPath.fill()
+
+            let fillWidth = max(2, barRect.width * clamped)
+            let fillRect = NSRect(x: barRect.minX, y: barRect.minY, width: fillWidth, height: barRect.height)
+            let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: barHeight / 2, yRadius: barHeight / 2)
+            NSColor.controlAccentColor.setFill()
+            fillPath.fill()
+
+            context.saveGState()
+            NSColor.white.withAlphaComponent(0.35).setStroke()
+            trackPath.lineWidth = 1
+            trackPath.stroke()
+            context.restoreGState()
+        }
+    }
+
+    private var progressView: ProgressTileView?
+
+    func setProgress(_ fraction: Double) {
+        let clamped = max(0, min(1, fraction))
+        let view = ensureProgressView()
+        view.fraction = clamped
+        if NSApp.dockTile.badgeLabel != nil {
+            NSApp.dockTile.badgeLabel = nil
+        }
+        NSApp.dockTile.display()
+    }
+
+    func clear() {
+        guard progressView != nil || NSApp.dockTile.contentView != nil || NSApp.dockTile.badgeLabel != nil else {
+            return
+        }
+        progressView = nil
+        NSApp.dockTile.contentView = nil
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.display()
+    }
+
+    private func ensureProgressView() -> ProgressTileView {
+        if let progressView {
+            progressView.frame = NSRect(origin: .zero, size: NSApp.dockTile.size)
+            return progressView
+        }
+
+        let view = ProgressTileView(frame: NSRect(origin: .zero, size: NSApp.dockTile.size))
+        view.wantsLayer = true
+        progressView = view
+        NSApp.dockTile.contentView = view
+        return view
+    }
+}
+
 final class NativeScanStore: ObservableObject {
     @Published var availableDrives: [NativeDriveInfo]
     @Published var selectedDrive: String
@@ -271,6 +356,7 @@ final class NativeScanStore: ObservableObject {
     private let patchFlushTimeBudgetSeconds: TimeInterval = 0.012
     private var pendingTerminalEvent: PendingTerminalEvent?
     private var ffiAbiCompatible = true
+    private let dockProgress = DockProgressOverlayController()
 
     init(launch: NativeLaunchOptions) {
         let runtimeAbi = ds_ffi_abi_version()
@@ -310,6 +396,7 @@ final class NativeScanStore: ObservableObject {
     }
 
     deinit {
+        dockProgress.clear()
         teardownSession(cancel: true, synchronous: true)
     }
 
@@ -1024,24 +1111,17 @@ final class NativeScanStore: ObservableObject {
     }
 
     private func updateDockTileProgress() {
-        let badge: String?
         if scanState == .running {
             let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
-            if denominator == 0 {
-                badge = "…"
-            } else {
-                let scanned = min(progress.bytesSeen, denominator)
-                let fraction = max(0.0, min(1.0, Double(scanned) / Double(denominator)))
-                let percent = Int((fraction * 100).rounded())
-                badge = "\(percent)%"
+            guard denominator > 0 else {
+                dockProgress.setProgress(0)
+                return
             }
+            let scanned = min(progress.bytesSeen, denominator)
+            let fraction = max(0.0, min(1.0, Double(scanned) / Double(denominator)))
+            dockProgress.setProgress(fraction)
         } else {
-            badge = nil
-        }
-
-        if NSApp.dockTile.badgeLabel != badge {
-            NSApp.dockTile.badgeLabel = badge
-            NSApp.dockTile.display()
+            dockProgress.clear()
         }
     }
 
