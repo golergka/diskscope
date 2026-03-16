@@ -24,6 +24,7 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         mainWindow = window
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
+        enforceFixedSizing(for: window)
         window.delegate = self
     }
 
@@ -34,17 +35,19 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
 
         let targetContentSize: NSSize
-        let targetMinSize: NSSize
         switch screen {
         case .setup:
-            targetContentSize = NSSize(width: 460, height: 255)
-            targetMinSize = NSSize(width: 420, height: 240)
+            targetContentSize = NSSize(
+                width: 460,
+                height: (store?.showAdvanced ?? false) ? 356 : 320
+            )
         case .results:
             targetContentSize = NSSize(width: 1200, height: 760)
-            targetMinSize = NSSize(width: 1080, height: 680)
         }
 
-        window.contentMinSize = targetMinSize
+        window.contentMinSize = targetContentSize
+        window.contentMaxSize = targetContentSize
+        enforceFixedSizing(for: window)
 
         let current = window.contentRect(forFrameRect: window.frame).size
         let delta = abs(current.width - targetContentSize.width) + abs(current.height - targetContentSize.height)
@@ -59,6 +62,15 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             }
         } else {
             window.setContentSize(targetContentSize)
+        }
+    }
+
+    private func enforceFixedSizing(for window: NSWindow) {
+        if window.styleMask.contains(.resizable) {
+            window.styleMask.remove(.resizable)
+        }
+        if let zoomButton = window.standardWindowButton(.zoomButton) {
+            zoomButton.isEnabled = false
         }
     }
 
@@ -160,7 +172,7 @@ struct DiskscopeNativeApp: App {
         Window("Diskscope Native", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 420, minHeight: 240)
+                .frame(minWidth: 460, minHeight: 320)
                 .onAppear {
                     appDelegate.bind(store: store)
                     appDelegate.attachMainWindowIfNeeded()
@@ -176,6 +188,12 @@ struct DiskscopeNativeApp: App {
                 }
                 .onChange(of: store.currentScreen) { screen in
                     appDelegate.applyWindowLayout(for: screen)
+                }
+                .onChange(of: store.showAdvanced) { _ in
+                    guard store.currentScreen == .setup else {
+                        return
+                    }
+                    appDelegate.applyWindowLayout(for: .setup)
                 }
         }
         .commands {

@@ -39,7 +39,7 @@ struct ContentView: View {
                     }
                     .padding(6)
                 }
-                .frame(height: 112)
+                .frame(height: setupDriveListHeight)
             }
 
             HStack(spacing: 10) {
@@ -138,6 +138,11 @@ struct ContentView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var setupDriveListHeight: CGFloat {
+        let visibleRows = max(2, min(store.availableDrives.count, 4))
+        return CGFloat(visibleRows) * 38 + 12
     }
 
     private var setupTargetSummary: some View {
