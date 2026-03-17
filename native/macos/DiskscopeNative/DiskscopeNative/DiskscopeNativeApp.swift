@@ -67,8 +67,7 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let visibleRows = max(2, min(driveCount, 4))
         let driveListHeight = CGFloat(visibleRows) * 48 + 12
         let baseHeight: CGFloat = 232
-        let proHeight: CGFloat = (store?.proAvailable ?? false) ? 92 : 0
-        return baseHeight + driveListHeight + proHeight
+        return baseHeight + driveListHeight
     }
 
     private func enforceFixedSizing(for window: NSWindow) {

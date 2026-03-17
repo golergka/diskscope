@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.openWindow) private var openWindow
     @State private var showingAdvancedSheet = false
+    @State private var showingMonitoringSheet = false
 
     var body: some View {
         Group {
@@ -105,30 +106,16 @@ struct ContentView: View {
                 .disabled(!store.canStartScan)
                 .keyboardShortcut(.return, modifiers: [])
             }
-
-            if store.proAvailable {
-                GroupBox("Pro Monitoring") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Toggle("Background daemon", isOn: $store.proMonitorEnabled)
-                                .disabled(!store.canUseProMonitor)
-                            Spacer()
-                            Text(store.purchaseState.label)
-                                .font(.caption)
-                                .foregroundStyle(store.proEnabled ? .green : .secondary)
-                        }
-                        Text("Uses FSEvents with scheduled reconcile scans for long offline periods.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.top, 2)
-                }
-            }
         }
         .sheet(isPresented: $showingAdvancedSheet) {
             SetupAdvancedSheetView()
                 .environmentObject(store)
                 .frame(minWidth: 420, minHeight: 220)
+        }
+        .sheet(isPresented: $showingMonitoringSheet) {
+            MonitoringSheetView()
+                .environmentObject(store)
+                .frame(minWidth: 520, minHeight: 240)
         }
     }
 
@@ -232,6 +219,12 @@ struct ContentView: View {
                     store.buyFullVersion()
                 }
                 .buttonStyle(.borderedProminent)
+            }
+            if store.proEnabled {
+                Button("Monitoring…") {
+                    showingMonitoringSheet = true
+                }
+                .buttonStyle(.bordered)
             }
 
             Button("Change Target") {
@@ -445,6 +438,50 @@ private struct SetupAdvancedSheetView: View {
                     store.workerOverrideText = ""
                     store.queueLimitText = "64"
                     store.thresholdOverrideText = ""
+                }
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+    }
+}
+
+private struct MonitoringSheetView: View {
+    @EnvironmentObject var store: NativeScanStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Background Monitoring")
+                .font(.headline)
+
+            if store.proEnabled {
+                Text("Full Version is unlocked. Background daemon monitoring is planned for the next milestone.")
+                    .font(.body)
+                Text("Planned behavior: LaunchAgent + FSEvents stream with periodic reconcile scans and growth alerts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Enable background daemon (coming soon)", isOn: .constant(false))
+                    .disabled(true)
+            } else {
+                Text("Unlock Full Version to access background monitoring when it ships.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            HStack {
+                if store.buyFullVersionVisible {
+                    Button("Buy Full Version") {
+                        store.buyFullVersion()
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
                 Spacer()
                 Button("Done") {
