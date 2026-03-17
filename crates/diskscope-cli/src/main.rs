@@ -74,6 +74,7 @@ fn parse_ui_launch_options(args: &[String]) -> UiLaunchOptions {
 struct NativeArgs {
     start: bool,
     path: Option<PathBuf>,
+    pro_unlocked: bool,
 }
 
 fn run_native_ui(args: Vec<String>) {
@@ -104,7 +105,7 @@ fn run_native_ui(args: Vec<String>) {
     // copy with the same bundle identifier is installed or already running.
     cmd.arg("-n");
     cmd.arg(&app_path);
-    if native_args.start || native_args.path.is_some() {
+    if native_args.start || native_args.path.is_some() || native_args.pro_unlocked {
         cmd.arg("--args");
         if native_args.start {
             cmd.arg("--start");
@@ -112,6 +113,9 @@ fn run_native_ui(args: Vec<String>) {
         if let Some(path) = native_args.path {
             cmd.arg("--path");
             cmd.arg(path);
+        }
+        if native_args.pro_unlocked {
+            cmd.arg("--pro-unlocked");
         }
     }
 
@@ -179,6 +183,7 @@ fn parse_native_args(args: &[String]) -> NativeArgs {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--start" => parsed.start = true,
+            "--pro-unlocked" => parsed.pro_unlocked = true,
             "--path" => {
                 let value = iter.next().unwrap_or_else(|| {
                     eprintln!("missing value for --path");
@@ -333,7 +338,9 @@ fn print_top_usage() {
     println!("Usage:");
     println!("  diskscope scan [PATH] [options]           Run CLI scanner");
     println!("  diskscope ui [--start] [--path PATH]      Launch egui frontend");
-    println!("  diskscope ui-native [--start] [--path PATH] Launch native macOS app");
+    println!(
+        "  diskscope ui-native [--start] [--path PATH] [--pro-unlocked] Launch native macOS app"
+    );
     println!("  diskscope clean-native                     Remove native macOS build artifacts");
     println!();
     println!("CLI scan options:");

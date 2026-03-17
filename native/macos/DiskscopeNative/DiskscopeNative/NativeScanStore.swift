@@ -235,6 +235,7 @@ struct NativeProgress {
 struct NativeLaunchOptions {
     var autoStart: Bool = false
     var pathOverride: String?
+    var proUnlocked: Bool = false
 
     init(arguments: [String]) {
         var iterator = arguments.dropFirst().makeIterator()
@@ -244,6 +245,8 @@ struct NativeLaunchOptions {
                 autoStart = true
             case "--path":
                 pathOverride = iterator.next()
+            case "--pro-unlocked":
+                proUnlocked = true
             default:
                 continue
             }
@@ -455,6 +458,13 @@ final class NativeScanStore: ObservableObject {
         }
 
         refreshProCapabilities()
+        if launch.proUnlocked {
+            purchaseState = .unlocked
+            proAvailable = true
+            proEnabled = true
+            upgradeCtaTarget = .inAppPurchase
+            statusLine = "Full Version unlocked (dev flag)"
+        }
         if distribution == .appStore {
             Task { @MainActor in
                 await refreshStoreKitEntitlementIfAvailable()
