@@ -51,7 +51,7 @@ cargo run -p diskscope -- ui --path / --start
 
 ### `diskscope ui-native`
 
-Launches native macOS frontend app bundle.
+Builds and launches native macOS frontend app bundle.
 
 ```bash
 cargo run -p diskscope -- ui-native
@@ -61,6 +61,7 @@ cargo run -p diskscope -- ui-native --path / --start
 Behavior:
 - default launch opens **Setup** ("What to Scan").
 - `--start --path PATH` opens **Results** immediately and starts scanning.
+- before launch, CLI runs `xcodebuild` to `native/macos/DiskscopeNative/build` (Debug) so the app is always fresh.
 
 If the app bundle is missing, CLI exits non-zero and prints deterministic build steps.
 
@@ -80,7 +81,7 @@ cargo run -p diskscope -- clean-native
 - Xcode 16+
 - Rust stable toolchain
 
-### Build
+### Build (manual, optional)
 
 From repo root:
 
@@ -105,7 +106,9 @@ Then launch through CLI:
 cargo run -p diskscope -- ui-native --path / --start
 ```
 
-`ui-native` now picks the freshest discovered app bundle (based on app executable/plist timestamp) to avoid stale path selection.
+`ui-native` now performs a deterministic native build to `native/macos/DiskscopeNative/build` before launch, then opens:
+
+- `native/macos/DiskscopeNative/build/Build/Products/Debug/DiskscopeNative.app`
 
 Optional app override path:
 

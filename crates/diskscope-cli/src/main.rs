@@ -2,9 +2,8 @@ use diskscope_core::scanner;
 use diskscope_egui::app::{self, UiLaunchOptions};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use std::time::SystemTime;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -79,6 +78,10 @@ struct NativeArgs {
 
 fn run_native_ui(args: Vec<String>) {
     let native_args = parse_native_args(&args);
+
+    if env::var("DISKSCOPE_NATIVE_APP").is_err() {
+        ensure_native_app_built();
+    }
 
     let app_path = match discover_native_app_path() {
         Some(path) => path,
@@ -203,14 +206,13 @@ fn discover_native_app_path() -> Option<PathBuf> {
         if path.exists() {
             return Some(path);
         }
+        eprintln!("DISKSCOPE_NATIVE_APP points to missing path: {}", path.display());
+        std::process::exit(1);
     }
 
-    let mut candidates: Vec<PathBuf> = candidate_native_app_paths()
+    candidate_native_app_paths()
         .into_iter()
-        .filter(|path| path.exists())
-        .collect();
-    candidates.sort_by(|lhs, rhs| native_app_freshness(rhs).cmp(&native_app_freshness(lhs)));
-    candidates.into_iter().next()
+        .find(|path| path.exists())
 }
 
 fn candidate_native_app_paths() -> Vec<PathBuf> {
@@ -218,12 +220,11 @@ fn candidate_native_app_paths() -> Vec<PathBuf> {
 
     vec![
         workspace_root
-            .join("native/macos/DiskscopeNative/build/Build/Products/Release/DiskscopeNative.app"),
-        workspace_root
             .join("native/macos/DiskscopeNative/build/Build/Products/Debug/DiskscopeNative.app"),
+        workspace_root
+            .join("native/macos/DiskscopeNative/build/Build/Products/Release/DiskscopeNative.app"),
         workspace_root.join("native/macos/DiskscopeNative/build/Release/DiskscopeNative.app"),
         workspace_root.join("native/macos/DiskscopeNative/build/Debug/DiskscopeNative.app"),
-        workspace_root.join("native/macos/DiskscopeNative/DiskscopeNative.app"),
     ]
 }
 
@@ -235,23 +236,40 @@ fn native_clean_paths() -> Vec<PathBuf> {
     ]
 }
 
-fn native_app_freshness(path: &Path) -> u128 {
-    native_app_timestamp(path)
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
-}
+fn ensure_native_app_built() {
+    let workspace_root = workspace_root();
+    let project = workspace_root.join("native/macos/DiskscopeNative/DiskscopeNative.xcodeproj");
+    let derived_data = workspace_root.join("native/macos/DiskscopeNative/build");
 
-fn native_app_timestamp(path: &Path) -> SystemTime {
-    file_modified(path.join("Contents/MacOS/DiskscopeNative"))
-        .or_else(|| file_modified(path.join("Contents/Info.plist")))
-        .or_else(|| file_modified(path.join("Contents/Resources/AppIconDock.icns")))
-        .or_else(|| file_modified(path.to_path_buf()))
-        .unwrap_or(SystemTime::UNIX_EPOCH)
-}
+    eprintln!(
+        "building native app: xcodebuild -project {} -scheme DiskscopeNative -configuration Debug -derivedDataPath {} build",
+        project.display(),
+        derived_data.display()
+    );
 
-fn file_modified(path: PathBuf) -> Option<SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+    let status = Command::new("xcodebuild")
+        .arg("-project")
+        .arg(project)
+        .arg("-scheme")
+        .arg("DiskscopeNative")
+        .arg("-configuration")
+        .arg("Debug")
+        .arg("-derivedDataPath")
+        .arg(derived_data)
+        .arg("build")
+        .status();
+
+    match status {
+        Ok(code) if code.success() => {}
+        Ok(code) => {
+            eprintln!("xcodebuild failed with status: {code}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("failed to run xcodebuild: {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn workspace_root() -> PathBuf {

@@ -5,7 +5,7 @@
 `ui-native` is an alternative frontend for `diskscope`.
 
 - `diskscope ui` remains `egui`.
-- `diskscope ui-native` launches `DiskscopeNative.app`.
+- `diskscope ui-native` builds and launches `DiskscopeNative.app`.
 - Both consume shared Rust scan semantics from `diskscope-core`.
 
 ## Screen model
@@ -72,7 +72,8 @@ cargo run -p diskscope -- ui-native --path / --start
 
 Notes:
 - `diskscope clean-native` removes stale native artifacts (`native/macos/DiskscopeNative/build` and local app copy).
-- `diskscope ui-native` chooses the freshest discovered `.app` bundle by timestamp, not first path match.
+- `diskscope ui-native` runs deterministic `xcodebuild` (Debug, fixed `-derivedDataPath`) before launch.
+- launch target is deterministic: `native/macos/DiskscopeNative/build/Build/Products/Debug/DiskscopeNative.app`.
 
 ## Runtime behavior notes
 
@@ -112,11 +113,11 @@ Build using the exact command above with `-derivedDataPath native/macos/Diskscop
 
 ### `ui-native` launches an older native build
 
-Run a deterministic clean + rebuild:
+Run a deterministic clean and relaunch:
 
 ```bash
 cargo run -p diskscope -- clean-native
-xcodebuild -project native/macos/DiskscopeNative/DiskscopeNative.xcodeproj -scheme DiskscopeNative -configuration Debug -derivedDataPath native/macos/DiskscopeNative/build build
+cargo run -p diskscope -- ui-native
 ```
 
 ### Linker cannot find `-ldiskscope_ffi`
