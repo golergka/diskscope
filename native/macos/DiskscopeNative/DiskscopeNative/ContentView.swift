@@ -807,6 +807,11 @@ private struct HierarchyOutlineView: NSViewRepresentable {
 private final class HierarchyOutlineContainerView: NSView {
     private let reloadMinIntervalSeconds: CFAbsoluteTime = 0.2
     private let fullReloadRowLimit = 2_000
+    private let minSizeColumnWidth: CGFloat = 108
+    private let maxSizeColumnWidth: CGFloat = 260
+    private let sizeColumnPadding: CGFloat = 16
+    private let sizeValueFont = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
+    private let sizeBadgeFont = NSFont.systemFont(ofSize: 11.5, weight: .semibold)
 
     private let scrollView = NSScrollView()
     private let outlineView = NSOutlineView()
@@ -865,6 +870,7 @@ private final class HierarchyOutlineContainerView: NSView {
             NativeDiagnostics.debug("outline_root_changed root=\(rootId)")
             outlineView.reloadData()
             applyExpandedState(coordinator: coordinator)
+            fitSizeColumnToContent(coordinator: coordinator)
             syncSelection(coordinator: coordinator, forceRevealAncestors: true)
             return
         }
@@ -896,8 +902,10 @@ private final class HierarchyOutlineContainerView: NSView {
         outlineView.usesAlternatingRowBackgroundColors = false
         outlineView.allowsTypeSelect = true
         outlineView.allowsMultipleSelection = false
+        outlineView.allowsColumnReordering = false
+        outlineView.allowsColumnResizing = false
         outlineView.rowHeight = 22
-        outlineView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        outlineView.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
 
         nameColumn.title = "Name"
         nameColumn.minWidth = 180
@@ -905,10 +913,10 @@ private final class HierarchyOutlineContainerView: NSView {
         nameColumn.resizingMask = .autoresizingMask
 
         sizeColumn.title = "Size"
-        sizeColumn.minWidth = 130
-        sizeColumn.maxWidth = 220
+        sizeColumn.minWidth = minSizeColumnWidth
+        sizeColumn.maxWidth = maxSizeColumnWidth
         sizeColumn.width = 160
-        sizeColumn.resizingMask = .autoresizingMask
+        sizeColumn.resizingMask = []
 
         outlineView.addTableColumn(nameColumn)
         outlineView.addTableColumn(sizeColumn)
@@ -934,6 +942,7 @@ private final class HierarchyOutlineContainerView: NSView {
         outlineView.target = coordinator
         outlineView.doubleAction = #selector(HierarchyOutlineView.Coordinator.handleDoubleClick(_:))
         configured = true
+        fitSizeColumnToContent(coordinator: coordinator)
     }
 
     private func applyExpandedState(coordinator: HierarchyOutlineView.Coordinator) {
@@ -1009,6 +1018,7 @@ private final class HierarchyOutlineContainerView: NSView {
         } else {
             refreshVisibleRows()
         }
+        fitSizeColumnToContent(coordinator: coordinator)
         lastReloadAt = CFAbsoluteTimeGetCurrent()
 
         if didFullReload || !isSelectionSynchronized(coordinator: coordinator) {
@@ -1128,5 +1138,72 @@ private final class HierarchyOutlineContainerView: NSView {
                 outlineView.expandItem(ancestorItem)
             }
         }
+    }
+
+    private func fitSizeColumnToContent(coordinator: HierarchyOutlineView.Coordinator) {
+        let target = desiredSizeColumnWidth(coordinator: coordinator)
+        guard abs(sizeColumn.width - target) > 0.5
+                || abs(sizeColumn.minWidth - target) > 0.5
+                || abs(sizeColumn.maxWidth - target) > 0.5 else {
+            return
+        }
+
+        sizeColumn.width = target
+        sizeColumn.minWidth = target
+        sizeColumn.maxWidth = target
+    }
+
+    private func desiredSizeColumnWidth(coordinator: HierarchyOutlineView.Coordinator) -> CGFloat {
+        guard let store else {
+            return 160
+        }
+
+        let totalRows = outlineView.numberOfRows
+        if totalRows <= 0 {
+            return 160
+        }
+
+        let rowsToMeasure: Range<Int>
+        if totalRows <= fullReloadRowLimit {
+            rowsToMeasure = 0..<totalRows
+        } else {
+            let visible = outlineView.rows(in: outlineView.visibleRect)
+            let start = max(visible.location, 0)
+            let end = min(totalRows, start + visible.length)
+            if start < end {
+                rowsToMeasure = start..<end
+            } else {
+                rowsToMeasure = 0..<min(totalRows, 200)
+            }
+        }
+
+        var widest: CGFloat = 0
+        for row in rowsToMeasure {
+            guard let item = outlineView.item(atRow: row),
+                  let nodeId = coordinator.nodeId(from: item),
+                  let node = store.node(nodeId) else {
+                continue
+            }
+
+            let sizeText = store.nodeSizeLabel(node)
+            var width = (sizeText as NSString).size(withAttributes: [.font: sizeValueFont]).width
+            let badge = store.nodeBadge(node)
+            if !badge.isEmpty {
+                width += ("  " as NSString).size(withAttributes: [.font: sizeValueFont]).width
+                width += (badge as NSString).size(withAttributes: [.font: sizeBadgeFont]).width
+            }
+
+            if width > widest {
+                widest = width
+            }
+        }
+
+        if widest == 0 {
+            widest = ("999.99 GiB  Deferred" as NSString).size(withAttributes: [.font: sizeValueFont]).width
+        }
+
+        let padded = widest + sizeColumnPadding
+        let clamped = min(max(padded, minSizeColumnWidth), maxSizeColumnWidth)
+        return ceil(clamped)
     }
 }
