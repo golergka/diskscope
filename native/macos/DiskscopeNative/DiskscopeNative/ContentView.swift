@@ -16,6 +16,27 @@ struct ContentView: View {
             }
         }
         .padding(store.currentScreen == .setup ? 10 : 12)
+        .alert(item: $store.upgradePrompt) { prompt in
+            if prompt.openAppStore {
+                return Alert(
+                    title: Text(prompt.title),
+                    message: Text(prompt.message),
+                    primaryButton: .default(Text("Open App Store")) {
+                        store.openUpgradeTarget()
+                    },
+                    secondaryButton: .cancel {
+                        store.dismissUpgradePrompt()
+                    }
+                )
+            }
+            return Alert(
+                title: Text(prompt.title),
+                message: Text(prompt.message),
+                dismissButton: .default(Text("OK")) {
+                    store.dismissUpgradePrompt()
+                }
+            )
+        }
     }
 
     private var setupScreen: some View {
@@ -24,6 +45,13 @@ struct ContentView: View {
                 Text("What to Scan")
                     .font(.headline)
                 Spacer()
+                if store.buyFullVersionVisible {
+                    Button(store.buyFullVersionLabel) {
+                        store.buyFullVersion()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
                 if store.canShowResultsScreen {
                     Button("Show Results") {
                         store.showResultsScreenIfAvailable()
@@ -46,10 +74,6 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Button("Select Folder…") {
                     store.selectFolderFromDialog()
-                }
-                if store.useCustomPath {
-                    TextField("Path", text: $store.customPath)
-                        .textFieldStyle(.roundedBorder)
                 }
                 Spacer()
             }
@@ -80,6 +104,25 @@ struct ContentView: View {
                 }
                 .disabled(!store.canStartScan)
                 .keyboardShortcut(.return, modifiers: [])
+            }
+
+            if store.proAvailable {
+                GroupBox("Pro Monitoring") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Toggle("Background daemon", isOn: $store.proMonitorEnabled)
+                                .disabled(!store.canUseProMonitor)
+                            Spacer()
+                            Text(store.purchaseState.label)
+                                .font(.caption)
+                                .foregroundStyle(store.proEnabled ? .green : .secondary)
+                        }
+                        Text("Uses FSEvents with scheduled reconcile scans for long offline periods.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 2)
+                }
             }
         }
         .sheet(isPresented: $showingAdvancedSheet) {
@@ -183,6 +226,13 @@ struct ContentView: View {
                 .lineLimit(1)
 
             Spacer()
+
+            if store.buyFullVersionVisible {
+                Button(store.buyFullVersionLabel) {
+                    store.buyFullVersion()
+                }
+                .buttonStyle(.borderedProminent)
+            }
 
             Button("Change Target") {
                 store.changeTarget()

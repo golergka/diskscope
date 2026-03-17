@@ -8,6 +8,20 @@ The project now ships as a dual-frontend system over one shared scan core:
 - `diskscope ui` for the existing `egui` desktop frontend.
 - `diskscope ui-native` for a native macOS frontend (SwiftUI shell + AppKit treemap).
 
+## Open-Core paid daemon
+
+The code in this repository (core, CLI, egui/native frontends and CLI helpers) remains MIT-licensed. The optional background daemon that powers the paid analytics/alerting experience lives in a private, source-available repository that is mounted as a git submodule at `pro/diskscope-pro-daemon`. App Store builds include that submodule, compile the daemon, and gate it behind a StoreKit one-time purchase; OSS builds omit the submodule (or compile the stub) and the UI simply routes `Buy Full Version` to an explanation dialog that links to the App Store listing.
+
+### Submodule setup
+```bash
+git submodule add <PRIVATE_REPO_URL> pro/diskscope-pro-daemon
+git submodule update --init --recursive pro/diskscope-pro-daemon
+```
+If you already have the submodule in place, keep it in sync with:
+```bash
+git submodule update --remote pro/diskscope-pro-daemon
+```
+
 ## Frontend model
 
 - Shared source of truth: `crates/diskscope-core`.
@@ -23,6 +37,7 @@ The project now ships as a dual-frontend system over one shared scan core:
 - `crates/diskscope-ffi`: C ABI bridge used by native macOS app.
 - `native/macos/DiskscopeNative`: Xcode project for native macOS frontend.
 - `assets/icon.png`: shared source icon used by frontends (egui/native/web).
+- `pro/diskscope-pro-daemon` (private submodule; source-available commercial license) hosts the paid monitoring daemon described in [LICENSING.md](LICENSING.md).
 
 ## Commands
 
@@ -74,6 +89,11 @@ cargo run -p diskscope -- clean-native
 ```
 
 ## Native macOS setup (`ui-native`)
+
+Paid upgrade behavior:
+
+- App Store builds (with the private `pro/diskscope-pro-daemon` submodule) display the `Buy Full Version` CTA and launch StoreKit one-time non-consumable purchases; once purchased the daemon/analytics UI unlocks.
+- OSS builds (without the submodule) keep the CTA but it flows into an explanation modal that directs users to the App Store version. The daemon code isn’t compiled in those artifacts, so free functionality remains unchanged.
 
 ### Prerequisites
 

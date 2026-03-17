@@ -22,8 +22,10 @@ Status legend:
 | App-lifecycle native behavior (stay running, Dock reopen route) | n/a | n/a | done | native | done |
 | One-file-system / hidden / symlink policies | done | done | partial (currently fixed defaults) | core/native | partial |
 | Native appearance hardening (final visual polish) | n/a | n/a | partial | native | partial |
+| Paid background daemon (alerts/history) | todo | todo | todo (App Store build only) | ops | todo |
 
 ## Notes
 
 - Shared scan semantics remain in `diskscope-core`; both UIs consume patch/progress events from the same core.
+- Paid daemon work lives in `pro/diskscope-pro-daemon` (private submodule). App Store builds include it and gate it behind a purchase; OSS builds keep the UI but route the `Buy Full Version` CTA to an explanation + App Store link.
 - Native frontend currently prioritizes functional parity; platform polish iteration is ongoing.

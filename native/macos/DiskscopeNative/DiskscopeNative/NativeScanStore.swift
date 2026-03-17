@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import os
+import StoreKit
 import SwiftUI
 
 private let kEventBatch = UInt32(DS_EVENT_BATCH)
@@ -145,6 +146,40 @@ enum NativeScreen: Equatable {
 enum NativeAppMode: Equatable {
     case choosingTarget
     case scanResults
+}
+
+enum NativePurchaseState: Equatable {
+    case unavailable
+    case locked
+    case unlocked
+
+    var label: String {
+        switch self {
+        case .unavailable:
+            return "Unavailable"
+        case .locked:
+            return "Locked"
+        case .unlocked:
+            return "Unlocked"
+        }
+    }
+}
+
+enum NativeUpgradeCtaTarget: Equatable {
+    case appStoreAppPage
+    case inAppPurchase
+}
+
+struct NativeUpgradePrompt: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let openAppStore: Bool
+}
+
+private enum NativeDistribution {
+    case oss
+    case appStore
 }
 
 struct NativeDriveInfo: Hashable, Identifiable {
@@ -360,8 +395,17 @@ final class NativeScanStore: ObservableObject {
     @Published private(set) var errorNodeCount: Int = 0
     @Published private(set) var deferredNodeCount: Int = 0
     @Published private(set) var runtimeErrors: [NativeRuntimeErrorEntry] = []
+    @Published private(set) var proAvailable: Bool = false
+    @Published private(set) var proEnabled: Bool = false
+    @Published private(set) var purchaseState: NativePurchaseState = .unavailable
+    @Published private(set) var upgradeCtaTarget: NativeUpgradeCtaTarget = .appStoreAppPage
+    @Published var upgradePrompt: NativeUpgradePrompt?
+    @Published var proMonitorEnabled: Bool = false
     private var childOrderRevisions: [UInt64: UInt64] = [:]
     private var errorNodeIds: Set<UInt64> = []
+    private let distribution: NativeDistribution
+    private let appStoreUrl: URL
+    private let proProductId: String?
 
     private var session: DsSessionHandleRef?
     private var pendingPatches: [IncomingPatch] = []
@@ -375,19 +419,29 @@ final class NativeScanStore: ObservableObject {
     private let dockProgress = DockProgressOverlayController()
 
     init(launch: NativeLaunchOptions) {
+        distribution = NativeScanStore.detectDistribution()
+        appStoreUrl = NativeScanStore.resolveAppStoreUrl()
+        proProductId = NativeScanStore.resolveProProductId()
         let runtimeAbi = ds_ffi_abi_version()
         ffiAbiCompatible = runtimeAbi == kExpectedAbiVersion
 
         let discoveredDrives = NativeScanStore.discoverDrives()
         availableDrives = discoveredDrives
-        selectedDrive = discoveredDrives.first?.path ?? "/"
+        let defaultDrivePath = discoveredDrives.first(where: { $0.path == "/" })?.path
+            ?? discoveredDrives.first?.path
+            ?? "/"
+        selectedDrive = defaultDrivePath
+        customPath = defaultDrivePath
 
         if let override = launch.pathOverride, !override.isEmpty {
-            customPath = override
-            useCustomPath = true
+            if launch.autoStart {
+                customPath = override
+                useCustomPath = true
+            }
             if availableDrives.contains(where: { $0.path == override }) {
                 selectedDrive = override
                 useCustomPath = false
+                customPath = override
             }
         }
 
@@ -398,6 +452,13 @@ final class NativeScanStore: ObservableObject {
             statusLine = "FFI ABI mismatch: native=\(runtimeAbi), expected=\(kExpectedAbiVersion)"
             NativeDiagnostics.warning("ffi_abi_mismatch native=\(runtimeAbi) expected=\(kExpectedAbiVersion)")
             appendRuntimeError(statusLine)
+        }
+
+        refreshProCapabilities()
+        if distribution == .appStore {
+            Task { @MainActor in
+                await refreshStoreKitEntitlementIfAvailable()
+            }
         }
 
         if launch.autoStart {
@@ -444,6 +505,27 @@ final class NativeScanStore: ObservableObject {
 
     var canShowResultsScreen: Bool {
         appMode == .scanResults
+    }
+
+    var canUseProMonitor: Bool {
+        proAvailable && proEnabled
+    }
+
+    var buyFullVersionVisible: Bool {
+        !proEnabled
+    }
+
+    var buyFullVersionLabel: String {
+        switch purchaseState {
+        case .unavailable, .locked:
+            return "Buy Full Version"
+        case .unlocked:
+            return "Full Version Unlocked"
+        }
+    }
+
+    var canRestorePurchases: Bool {
+        upgradeCtaTarget == .inAppPurchase
     }
 
     var totalErrorCount: Int {
@@ -533,6 +615,37 @@ final class NativeScanStore: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             setCustomTarget(path: url.path)
         }
+    }
+
+    func buyFullVersion() {
+        guard !proEnabled else {
+            return
+        }
+
+        switch upgradeCtaTarget {
+        case .inAppPurchase:
+            Task { @MainActor in
+                await purchaseFullVersionInApp()
+            }
+        case .appStoreAppPage:
+            presentOssUpgradePrompt()
+        }
+    }
+
+    func restorePurchases() {
+        Task { @MainActor in
+            await restorePurchasesInApp()
+        }
+    }
+
+    func dismissUpgradePrompt() {
+        upgradePrompt = nil
+    }
+
+    func openUpgradeTarget() {
+        let url = appStoreUrl
+        dismissUpgradePrompt()
+        NSWorkspace.shared.open(url)
     }
 
     func driveTotalLabel(for drive: NativeDriveInfo) -> String {
@@ -1181,6 +1294,191 @@ final class NativeScanStore: ObservableObject {
         }
     }
 
+    private func refreshProCapabilities() {
+        let raw = ds_pro_capabilities()
+        applyProCapabilities(raw)
+    }
+
+    private func applyProCapabilities(_ raw: DsProCapabilities) {
+        let targetFromFfi: NativeUpgradeCtaTarget = {
+            switch raw.upgrade_cta_target {
+            case DS_UPGRADE_CTA_IN_APP_PURCHASE:
+                return .inAppPurchase
+            default:
+                return .appStoreAppPage
+            }
+        }()
+        let unlockedFromFfi = raw.purchase_state == DS_PURCHASE_UNLOCKED
+        let availableFromFfi = raw.pro_available != 0
+
+        let derivedAvailable = availableFromFfi || unlockedFromFfi || distribution == .appStore
+        let derivedState: NativePurchaseState
+        if !derivedAvailable {
+            derivedState = .unavailable
+        } else if unlockedFromFfi {
+            derivedState = .unlocked
+        } else {
+            derivedState = .locked
+        }
+
+        let derivedTarget: NativeUpgradeCtaTarget = {
+            if distribution == .appStore {
+                return .inAppPurchase
+            }
+            return targetFromFfi
+        }()
+
+        purchaseState = derivedState
+        proAvailable = derivedAvailable
+        proEnabled = derivedState == .unlocked && raw.pro_enabled != 0
+        if derivedState == .unlocked && !proEnabled {
+            proEnabled = true
+        }
+        upgradeCtaTarget = derivedTarget
+        if !proEnabled {
+            proMonitorEnabled = false
+        }
+    }
+
+    private func presentOssUpgradePrompt() {
+        let message = """
+        Full Version is sold in the Mac App Store build.
+        Open the App Store page to purchase and unlock paid monitoring features.
+        """
+        upgradePrompt = NativeUpgradePrompt(
+            title: "Full Version",
+            message: message,
+            openAppStore: true
+        )
+    }
+
+    @MainActor
+    private func refreshStoreKitEntitlementIfAvailable() async {
+        guard distribution == .appStore else {
+            return
+        }
+        guard let proProductId, !proProductId.isEmpty else {
+            return
+        }
+
+        do {
+            for await result in Transaction.currentEntitlements {
+                let transaction = try checkVerified(result)
+                if transaction.productID == proProductId && transaction.revocationDate == nil {
+                    purchaseState = .unlocked
+                    proAvailable = true
+                    proEnabled = true
+                    return
+                }
+            }
+        } catch {
+            NativeDiagnostics.warning("storekit_entitlement_refresh_failed \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func purchaseFullVersionInApp() async {
+        guard distribution == .appStore else {
+            presentOssUpgradePrompt()
+            return
+        }
+        guard let proProductId, !proProductId.isEmpty else {
+            upgradePrompt = NativeUpgradePrompt(
+                title: "Purchase Not Configured",
+                message: "This build does not include a StoreKit product identifier.",
+                openAppStore: false
+            )
+            return
+        }
+
+        do {
+            let products = try await Product.products(for: [proProductId])
+            guard let product = products.first else {
+                upgradePrompt = NativeUpgradePrompt(
+                    title: "Product Unavailable",
+                    message: "The Full Version product could not be fetched from the App Store.",
+                    openAppStore: false
+                )
+                return
+            }
+
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                let transaction = try checkVerified(verification)
+                await transaction.finish()
+                purchaseState = .unlocked
+                proAvailable = true
+                proEnabled = true
+                statusLine = "Full Version unlocked"
+            case .pending:
+                statusLine = "Purchase pending approval"
+            case .userCancelled:
+                statusLine = "Purchase cancelled"
+            @unknown default:
+                statusLine = "Purchase status unknown"
+            }
+        } catch {
+            let message = "Unable to complete purchase: \(error.localizedDescription)"
+            upgradePrompt = NativeUpgradePrompt(
+                title: "Purchase Failed",
+                message: message,
+                openAppStore: false
+            )
+        }
+    }
+
+    @MainActor
+    private func restorePurchasesInApp() async {
+        guard distribution == .appStore else {
+            presentOssUpgradePrompt()
+            return
+        }
+        guard let proProductId, !proProductId.isEmpty else {
+            upgradePrompt = NativeUpgradePrompt(
+                title: "Restore Not Configured",
+                message: "This build does not include a StoreKit product identifier.",
+                openAppStore: false
+            )
+            return
+        }
+
+        do {
+            try await AppStore.sync()
+            for await result in Transaction.currentEntitlements {
+                let transaction = try checkVerified(result)
+                if transaction.productID == proProductId && transaction.revocationDate == nil {
+                    purchaseState = .unlocked
+                    proAvailable = true
+                    proEnabled = true
+                    statusLine = "Full Version restored"
+                    return
+                }
+            }
+            statusLine = "No Full Version purchase found to restore"
+        } catch {
+            let message = "Unable to restore purchases: \(error.localizedDescription)"
+            upgradePrompt = NativeUpgradePrompt(
+                title: "Restore Failed",
+                message: message,
+                openAppStore: false
+            )
+        }
+    }
+
+    private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
+        switch result {
+        case .verified(let safe):
+            return safe
+        case .unverified(_, _):
+            throw NSError(
+                domain: "com.diskscope.native.purchase",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "StoreKit verification failed."]
+            )
+        }
+    }
+
     private func teardownSession(cancel: Bool, synchronous: Bool) {
         guard let handle = session else {
             return
@@ -1370,5 +1668,41 @@ final class NativeScanStore: ObservableObject {
         default:
             return .unknown
         }
+    }
+
+    private static func detectDistribution() -> NativeDistribution {
+        if let env = ProcessInfo.processInfo.environment["DISKSCOPE_DISTRIBUTION"]?.lowercased(),
+           env == "appstore" {
+            return .appStore
+        }
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "DiskscopeDistribution") as? String,
+           plistValue.lowercased() == "appstore" {
+            return .appStore
+        }
+        return .oss
+    }
+
+    private static func resolveAppStoreUrl() -> URL {
+        if let env = ProcessInfo.processInfo.environment["DISKSCOPE_APP_STORE_URL"],
+           let url = URL(string: env), !env.isEmpty {
+            return url
+        }
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "DiskscopeAppStoreURL") as? String,
+           let url = URL(string: plistValue), !plistValue.isEmpty {
+            return url
+        }
+        return URL(string: "https://apps.apple.com/us/search?term=diskscope")!
+    }
+
+    private static func resolveProProductId() -> String? {
+        if let env = ProcessInfo.processInfo.environment["DISKSCOPE_PRO_PRODUCT_ID"],
+           !env.isEmpty {
+            return env
+        }
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "DiskscopeProProductID") as? String,
+           !plistValue.isEmpty {
+            return plistValue
+        }
+        return nil
     }
 }

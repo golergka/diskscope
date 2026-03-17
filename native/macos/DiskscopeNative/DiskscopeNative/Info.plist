@@ -20,6 +20,12 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>DiskscopeAppStoreURL</key>
+    <string>https://apps.apple.com/us/search?term=diskscope</string>
+    <key>DiskscopeDistribution</key>
+    <string>oss</string>
+    <key>DiskscopeProProductID</key>
+    <string></string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>

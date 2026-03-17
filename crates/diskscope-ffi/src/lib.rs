@@ -1,5 +1,6 @@
 use diskscope_core::events::{ProgressStats, RealtimeScanRequest, ScanEvent, ScanProfile};
 use diskscope_core::model::{ChildrenState, NodeKind, SizeState};
+use diskscope_core::pro_monitor::{NoProMonitor, ProMonitorApi, PurchaseState, UpgradeCtaTarget};
 use diskscope_core::scanner::{spawn_realtime_scan, ScanHandle};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
@@ -12,6 +13,30 @@ const DS_EVENT_PROGRESS: u32 = 2;
 const DS_EVENT_COMPLETED: u32 = 3;
 const DS_EVENT_CANCELLED: u32 = 4;
 const DS_EVENT_ERROR: u32 = 5;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum DsPurchaseState {
+    Unavailable = 0,
+    Locked = 1,
+    Unlocked = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum DsUpgradeCtaTarget {
+    AppStoreAppPage = 0,
+    InAppPurchase = 1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DsProCapabilities {
+    pub pro_available: u8,
+    pub pro_enabled: u8,
+    pub purchase_state: DsPurchaseState,
+    pub upgrade_cta_target: DsUpgradeCtaTarget,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -184,6 +209,25 @@ pub extern "C" fn ds_scan_free(handle: *mut DsSessionHandle) {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn ds_pro_capabilities() -> DsProCapabilities {
+    let monitor = NoProMonitor;
+    let caps = monitor.capabilities();
+    DsProCapabilities {
+        pro_available: caps.pro_available as u8,
+        pro_enabled: caps.pro_enabled as u8,
+        purchase_state: match caps.purchase_state {
+            PurchaseState::Unavailable => DsPurchaseState::Unavailable,
+            PurchaseState::Locked => DsPurchaseState::Locked,
+            PurchaseState::Unlocked => DsPurchaseState::Unlocked,
+        },
+        upgrade_cta_target: match caps.upgrade_cta_target {
+            UpgradeCtaTarget::AppStoreAppPage => DsUpgradeCtaTarget::AppStoreAppPage,
+            UpgradeCtaTarget::InAppPurchase => DsUpgradeCtaTarget::InAppPurchase,
+        },
+    }
+}
+
 fn c_path_to_pathbuf(path: *const c_char) -> Option<PathBuf> {
     let cstr = unsafe { path.as_ref() }?;
     let value = unsafe { CStr::from_ptr(cstr) }.to_str().ok()?;
@@ -330,6 +374,7 @@ fn encode_children_state(state: ChildrenState) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{ds_ffi_abi_version, ds_scan_free, ds_scan_join, ds_scan_start, DsScanRequest};
+    use super::{ds_pro_capabilities, DsPurchaseState};
     use std::ffi::CString;
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -379,5 +424,20 @@ mod tests {
         ds_scan_free(handle);
 
         assert!(counter.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn default_pro_capabilities_are_unavailable() {
+        let caps = ds_pro_capabilities();
+        assert_eq!(caps.pro_available, 0);
+        assert_eq!(caps.pro_enabled, 0);
+        assert_eq!(
+            caps.purchase_state as u32,
+            DsPurchaseState::Unavailable as u32
+        );
+        assert_eq!(
+            caps.upgrade_cta_target as u32,
+            super::DsUpgradeCtaTarget::AppStoreAppPage as u32
+        );
     }
 }

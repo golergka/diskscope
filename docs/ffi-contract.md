@@ -1,5 +1,11 @@
 # FFI Contract (`crates/diskscope-ffi`)
 
+The Rust FFI contract lives in the free MIT repo. The paid daemon in `pro/diskscope-pro-daemon` uses this same interface when the App Store build includes the private submodule, while OSS builds link the stub implementation. Building the paid daemon requires checking out that path and following its commercial license.
+
+## Optional pro capability signal
+
+`diskscope-ffi` exposes a capability query that reports whether the pro monitor was compiled in and whether the current build has unlocked it (App Store builds only). OSS builds pair this function with a stub that flags `pro_available = false` so the UI gracefully continues without the daemon.
+
 ## ABI version
 
 - Constant: `DS_FFI_ABI_VERSION = 2`
@@ -15,6 +21,7 @@ Consumers should validate ABI version before using session APIs.
 - `ds_scan_cancel`
 - `ds_scan_join`
 - `ds_scan_free`
+- `ds_pro_capabilities`
 
 Swift-friendly wrappers in header:
 
@@ -68,6 +75,18 @@ Fields:
 - `worker_override`: optional (`0` means unset)
 - `queue_limit`: bounded queue size (`0` means default)
 - `threshold_override`: optional bytes (`0` means default)
+
+### `DsProCapabilities`
+
+- `pro_available`: `0/1` build capability flag.
+- `pro_enabled`: `0/1` unlocked runtime flag.
+- `purchase_state`:
+  - `DS_PURCHASE_UNAVAILABLE = 0`
+  - `DS_PURCHASE_LOCKED = 1`
+  - `DS_PURCHASE_UNLOCKED = 2`
+- `upgrade_cta_target`:
+  - `DS_UPGRADE_CTA_APP_STORE_APP_PAGE = 0`
+  - `DS_UPGRADE_CTA_IN_APP_PURCHASE = 1`
 
 ### `DsProgressStats`
 

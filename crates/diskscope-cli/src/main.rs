@@ -206,7 +206,10 @@ fn discover_native_app_path() -> Option<PathBuf> {
         if path.exists() {
             return Some(path);
         }
-        eprintln!("DISKSCOPE_NATIVE_APP points to missing path: {}", path.display());
+        eprintln!(
+            "DISKSCOPE_NATIVE_APP points to missing path: {}",
+            path.display()
+        );
         std::process::exit(1);
     }
 

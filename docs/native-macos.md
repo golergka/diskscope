@@ -8,6 +8,21 @@
 - `diskscope ui-native` builds and launches `DiskscopeNative.app`.
 - Both consume shared Rust scan semantics from `diskscope-core`.
 
+## Paid daemon notes
+
+The paid background detector lives outside this repo under `pro/diskscope-pro-daemon` (a private submodule). App Store builds pull and compile that module while OSS builds omit or stub it. The native UI always shows the `Buy Full Version` CTA; in the App Store build it launches the StoreKit one-time purchase flow and unlocks the daemon when the receipt validates, while OSS builds route the CTA to an explanation modal that links to the App Store version. To configure the submodule in environments where you have permission, run:
+
+```bash
+git submodule add <PRIVATE_REPO_URL> pro/diskscope-pro-daemon
+git submodule update --init --recursive pro/diskscope-pro-daemon
+``` 
+
+Update it with
+
+```bash
+git submodule update --remote pro/diskscope-pro-daemon
+```
+
 ## Screen model
 
 - Setup screen:

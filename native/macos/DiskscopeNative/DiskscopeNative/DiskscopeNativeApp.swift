@@ -67,7 +67,8 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let visibleRows = max(2, min(driveCount, 4))
         let driveListHeight = CGFloat(visibleRows) * 48 + 12
         let baseHeight: CGFloat = 232
-        return baseHeight + driveListHeight
+        let proHeight: CGFloat = (store?.proAvailable ?? false) ? 92 : 0
+        return baseHeight + driveListHeight + proHeight
     }
 
     private func enforceFixedSizing(for window: NSWindow) {
@@ -129,6 +130,18 @@ private struct NativeAppCommands: Commands {
                 store.rescan()
             }
             .disabled(!store.canRescan)
+
+            Divider()
+
+            Button("Buy Full Version") {
+                store.buyFullVersion()
+            }
+            .disabled(!store.buyFullVersionVisible)
+
+            Button("Restore Purchases") {
+                store.restorePurchases()
+            }
+            .disabled(!store.canRestorePurchases)
 
             Divider()
 
@@ -195,6 +208,12 @@ struct DiskscopeNativeApp: App {
                     appDelegate.applyWindowLayout(for: screen)
                 }
                 .onChange(of: store.availableDrives.count) { _ in
+                    guard store.currentScreen == .setup else {
+                        return
+                    }
+                    appDelegate.applyWindowLayout(for: .setup, animated: false)
+                }
+                .onChange(of: store.proAvailable) { _ in
                     guard store.currentScreen == .setup else {
                         return
                     }

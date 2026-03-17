@@ -1,0 +1,3 @@
+[submodule "pro/diskscope-pro-daemon"]
+	path = pro/diskscope-pro-daemon
+	url = git@github.com:YOUR_ORG/diskscope-pro-daemon.git

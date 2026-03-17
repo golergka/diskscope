@@ -28,6 +28,24 @@ extern "C" {
 #define DS_CHILDREN_STATE_FINAL 2u
 #define DS_CHILDREN_STATE_COLLAPSED_BY_THRESHOLD 3u
 
+typedef enum DsPurchaseState {
+  DS_PURCHASE_UNAVAILABLE = 0u,
+  DS_PURCHASE_LOCKED = 1u,
+  DS_PURCHASE_UNLOCKED = 2u,
+} DsPurchaseState;
+
+typedef enum DsUpgradeCtaTarget {
+  DS_UPGRADE_CTA_APP_STORE_APP_PAGE = 0u,
+  DS_UPGRADE_CTA_IN_APP_PURCHASE = 1u,
+} DsUpgradeCtaTarget;
+
+typedef struct DsProCapabilities {
+  uint8_t pro_available;
+  uint8_t pro_enabled;
+  DsPurchaseState purchase_state;
+  DsUpgradeCtaTarget upgrade_cta_target;
+} DsProCapabilities;
+
 typedef struct DsScanRequest {
   const char *root_path;
   uint8_t include_hidden;
@@ -89,6 +107,7 @@ DsSessionHandle *ds_scan_start(const DsScanRequest *request, DsScanEventCallback
 void ds_scan_cancel(DsSessionHandle *handle);
 void ds_scan_join(DsSessionHandle *handle);
 void ds_scan_free(DsSessionHandle *handle);
+DsProCapabilities ds_pro_capabilities(void);
 
 static inline DsSessionHandleRef ds_scan_start_ref(
     const DsScanRequest *request,
