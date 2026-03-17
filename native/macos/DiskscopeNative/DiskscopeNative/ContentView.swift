@@ -665,8 +665,14 @@ private struct HierarchyOutlineView: NSViewRepresentable {
         private func sizeCell(outlineView: NSOutlineView, node: NativeNode) -> NSTableCellView {
             let identifier = NSUserInterfaceItemIdentifier("HierarchySizeCell")
             let cell: NSTableCellView
+            let label: NSTextField
+            let deferredIconView: NSImageView
+            let errorIconView: NSImageView
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
+                label = reused.textField ?? NSTextField(labelWithString: "")
+                deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView()
+                errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView()
             } else {
                 cell = NSTableCellView(frame: .zero)
                 cell.identifier = identifier
@@ -676,43 +682,94 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 label.alignment = .right
                 label.lineBreakMode = .byTruncatingHead
                 label.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+                label.textColor = .secondaryLabelColor
 
-                cell.addSubview(label)
+                let deferredIconView = NSImageView(frame: .zero)
+                deferredIconView.translatesAutoresizingMaskIntoConstraints = false
+                deferredIconView.imageScaling = .scaleProportionallyDown
+                deferredIconView.contentTintColor = .systemOrange
+                deferredIconView.tag = 1001
+                deferredIconView.isHidden = true
+                deferredIconView.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
+
+                let errorIconView = NSImageView(frame: .zero)
+                errorIconView.translatesAutoresizingMaskIntoConstraints = false
+                errorIconView.imageScaling = .scaleProportionallyDown
+                errorIconView.contentTintColor = .systemRed
+                errorIconView.tag = 1002
+                errorIconView.isHidden = true
+                errorIconView.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
+
+                let stack = NSStackView(views: [label, deferredIconView, errorIconView])
+                stack.translatesAutoresizingMaskIntoConstraints = false
+                stack.orientation = .horizontal
+                stack.alignment = .centerY
+                stack.spacing = 4
+                stack.distribution = .fill
+
+                label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                deferredIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+                errorIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+                cell.addSubview(stack)
                 cell.textField = label
 
                 NSLayoutConstraint.activate([
-                    label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                    label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-                    label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+                    stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                    stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                    stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    deferredIconView.widthAnchor.constraint(equalToConstant: 12),
+                    deferredIconView.heightAnchor.constraint(equalToConstant: 12),
+                    errorIconView.widthAnchor.constraint(equalToConstant: 12),
+                    errorIconView.heightAnchor.constraint(equalToConstant: 12)
                 ])
+
+                label.stringValue = parent.store.nodeSizeLabel(node)
+                configureSizeStatusIcons(
+                    node: node,
+                    deferredIconView: deferredIconView,
+                    errorIconView: errorIconView
+                )
+                return cell
             }
 
-            cell.textField?.attributedStringValue = sizeAttributedText(for: node)
+            label.stringValue = parent.store.nodeSizeLabel(node)
+            label.textColor = .secondaryLabelColor
+            configureSizeStatusIcons(
+                node: node,
+                deferredIconView: deferredIconView,
+                errorIconView: errorIconView
+            )
             return cell
         }
 
-        private func sizeAttributedText(for node: NativeNode) -> NSAttributedString {
-            let baseAttributes: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
-            ]
+        private func configureSizeStatusIcons(
+            node: NativeNode,
+            deferredIconView: NSImageView,
+            errorIconView: NSImageView
+        ) {
+            let showsDeferred = node.childrenState == .collapsedByThreshold
+            deferredIconView.isHidden = !showsDeferred
+            deferredIconView.toolTip = showsDeferred
+                ? "Deferred: details were collapsed by threshold."
+                : nil
 
-            let output = NSMutableAttributedString(
-                string: parent.store.nodeSizeLabel(node),
-                attributes: baseAttributes
-            )
+            let showsError = node.errorFlag
+            errorIconView.isHidden = !showsError
+            errorIconView.toolTip = showsError
+                ? "Error: this path could not be fully read."
+                : nil
+        }
 
-            let badge = parent.store.nodeBadge(node)
-            if !badge.isEmpty {
-                let badgeColor: NSColor = node.errorFlag ? .systemRed : .systemOrange
-                let badgeAttributes: [NSAttributedString.Key: Any] = [
-                    .foregroundColor: badgeColor,
-                    .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold)
-                ]
-                output.append(NSAttributedString(string: "  \(badge)", attributes: badgeAttributes))
+        private func statusIcon(key: String, symbol: String) -> NSImage {
+            if let cached = iconCache[key] {
+                return cached
             }
 
-            return output
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage()
+            image.isTemplate = true
+            iconCache[key] = image
+            return image
         }
 
         func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -810,8 +867,10 @@ private final class HierarchyOutlineContainerView: NSView {
     private let minSizeColumnWidth: CGFloat = 108
     private let maxSizeColumnWidth: CGFloat = 260
     private let sizeColumnPadding: CGFloat = 16
+    private let sizeToStatusGap: CGFloat = 6
+    private let statusIconWidth: CGFloat = 12
+    private let statusIconSpacing: CGFloat = 4
     private let sizeValueFont = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
-    private let sizeBadgeFont = NSFont.systemFont(ofSize: 11.5, weight: .semibold)
 
     private let scrollView = NSScrollView()
     private let outlineView = NSOutlineView()
@@ -1187,10 +1246,19 @@ private final class HierarchyOutlineContainerView: NSView {
 
             let sizeText = store.nodeSizeLabel(node)
             var width = (sizeText as NSString).size(withAttributes: [.font: sizeValueFont]).width
-            let badge = store.nodeBadge(node)
-            if !badge.isEmpty {
-                width += ("  " as NSString).size(withAttributes: [.font: sizeValueFont]).width
-                width += (badge as NSString).size(withAttributes: [.font: sizeBadgeFont]).width
+            let hasDeferred = node.childrenState == .collapsedByThreshold
+            let hasError = node.errorFlag
+            if hasDeferred || hasError {
+                width += sizeToStatusGap
+                if hasDeferred {
+                    width += statusIconWidth
+                }
+                if hasDeferred && hasError {
+                    width += statusIconSpacing
+                }
+                if hasError {
+                    width += statusIconWidth
+                }
             }
 
             if width > widest {
@@ -1199,7 +1267,9 @@ private final class HierarchyOutlineContainerView: NSView {
         }
 
         if widest == 0 {
-            widest = ("999.99 GiB  Deferred" as NSString).size(withAttributes: [.font: sizeValueFont]).width
+            widest = ("999.99 GiB" as NSString).size(withAttributes: [.font: sizeValueFont]).width
+                + sizeToStatusGap
+                + statusIconWidth
         }
 
         let padded = widest + sizeColumnPadding

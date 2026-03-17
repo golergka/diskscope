@@ -81,6 +81,7 @@ Notes:
 - Root node size updates incrementally (`Partial`) while workers complete subtrees.
 - During scan, treemap relayout is throttled and adaptive (`~1-3s`) using patch-backlog signals.
 - Top bar exposes aggregate `Error` and `Deferred` counts so incomplete coverage is explicit.
+- In hierarchy size column, per-node status is shown as icons with hover tooltips (error/deferred), not badge text.
 - Errors can be reviewed in a dedicated `Scan Errors` window (results button or `Show Scan Errors` menu command).
 - App lifecycle:
   - single main window.
