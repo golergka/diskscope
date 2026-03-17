@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.openWindow) private var openWindow
+    @State private var showingAdvancedSheet = false
 
     var body: some View {
         Group {
@@ -67,8 +68,10 @@ struct ContentView: View {
                 .pickerStyle(.menu)
                 .frame(width: 170)
 
-                Toggle("Advanced", isOn: $store.showAdvanced)
-                    .toggleStyle(.checkbox)
+                Button("Advanced…") {
+                    showingAdvancedSheet = true
+                }
+                .buttonStyle(.bordered)
 
                 Spacer()
 
@@ -78,21 +81,11 @@ struct ContentView: View {
                 .disabled(!store.canStartScan)
                 .keyboardShortcut(.return, modifiers: [])
             }
-
-            if store.showAdvanced {
-                HStack(spacing: 10) {
-                    TextField("Workers (override)", text: $store.workerOverrideText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 170)
-                    TextField("Queue limit", text: $store.queueLimitText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                    TextField("Threshold bytes", text: $store.thresholdOverrideText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 170)
-                    Spacer()
-                }
-            }
+        }
+        .sheet(isPresented: $showingAdvancedSheet) {
+            SetupAdvancedSheetView()
+                .environmentObject(store)
+                .frame(minWidth: 420, minHeight: 220)
         }
     }
 
@@ -366,6 +359,51 @@ struct ContentView: View {
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct SetupAdvancedSheetView: View {
+    @EnvironmentObject var store: NativeScanStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Advanced Tuning")
+                .font(.headline)
+
+            Form {
+                LabeledContent("Workers override") {
+                    TextField("Auto", text: $store.workerOverrideText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 170)
+                }
+                LabeledContent("Queue limit") {
+                    TextField("64", text: $store.queueLimitText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 170)
+                }
+                LabeledContent("Threshold bytes") {
+                    TextField("Auto", text: $store.thresholdOverrideText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 170)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Button("Reset Defaults") {
+                    store.workerOverrideText = ""
+                    store.queueLimitText = "64"
+                    store.thresholdOverrideText = ""
+                }
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
     }
 }
 

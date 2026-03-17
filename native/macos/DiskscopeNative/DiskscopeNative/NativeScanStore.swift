@@ -347,7 +347,6 @@ final class NativeScanStore: ObservableObject {
     @Published var statusLine: String = "Ready"
     @Published var progress: NativeProgress = NativeProgress()
     @Published var profile: NativeProfile = .balanced
-    @Published var showAdvanced: Bool = false
     @Published var workerOverrideText: String = ""
     @Published var queueLimitText: String = "64"
     @Published var thresholdOverrideText: String = ""

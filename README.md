@@ -140,6 +140,7 @@ Native macOS frontend currently includes:
 
 - explicit two-screen flow:
   - **Setup**: drive cards with Capacity/Used/Free stats + `Select Folder…` target picker.
+  - setup advanced tuning is opened via native `Advanced…` modal sheet (not inline-expanding controls).
   - **Results**: progress/status + hierarchy tree + treemap.
 - drive selection and optional custom path.
 - start/cancel/rescan and profile/tuning controls.

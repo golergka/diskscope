@@ -14,7 +14,7 @@
   - choose mounted drive from native cards.
   - view per-drive `Capacity / Used / Free`.
   - optionally choose custom folder (`Select Folder…`).
-  - set profile and advanced tuning before scan.
+  - set profile and open advanced tuning via `Advanced…` modal sheet before scan.
 - Results screen:
   - progress/status.
   - collapsible hierarchy + treemap panes.

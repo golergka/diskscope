@@ -67,8 +67,7 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let visibleRows = max(2, min(driveCount, 4))
         let driveListHeight = CGFloat(visibleRows) * 48 + 12
         let baseHeight: CGFloat = 232
-        let advancedExtra: CGFloat = (store?.showAdvanced ?? false) ? 42 : 0
-        return baseHeight + driveListHeight + advancedExtra
+        return baseHeight + driveListHeight
     }
 
     private func enforceFixedSizing(for window: NSWindow) {
@@ -194,12 +193,6 @@ struct DiskscopeNativeApp: App {
                 }
                 .onChange(of: store.currentScreen) { screen in
                     appDelegate.applyWindowLayout(for: screen)
-                }
-                .onChange(of: store.showAdvanced) { _ in
-                    guard store.currentScreen == .setup else {
-                        return
-                    }
-                    appDelegate.applyWindowLayout(for: .setup)
                 }
                 .onChange(of: store.availableDrives.count) { _ in
                     guard store.currentScreen == .setup else {
