@@ -37,10 +37,7 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let targetContentSize: NSSize
         switch screen {
         case .setup:
-            targetContentSize = NSSize(
-                width: 460,
-                height: (store?.showAdvanced ?? false) ? 430 : 388
-            )
+            targetContentSize = NSSize(width: 460, height: setupContentHeight())
         case .results:
             targetContentSize = NSSize(width: 1200, height: 760)
         }
@@ -63,6 +60,15 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         } else {
             window.setContentSize(targetContentSize)
         }
+    }
+
+    private func setupContentHeight() -> CGFloat {
+        let driveCount = store?.availableDrives.count ?? 0
+        let visibleRows = max(2, min(driveCount, 4))
+        let driveListHeight = CGFloat(visibleRows) * 48 + 12
+        let baseHeight: CGFloat = 232
+        let advancedExtra: CGFloat = (store?.showAdvanced ?? false) ? 42 : 0
+        return baseHeight + driveListHeight + advancedExtra
     }
 
     private func enforceFixedSizing(for window: NSWindow) {
@@ -172,7 +178,7 @@ struct DiskscopeNativeApp: App {
         Window("Diskscope Native", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 460, minHeight: 388)
+                .frame(minWidth: 460, minHeight: 320)
                 .onAppear {
                     appDelegate.bind(store: store)
                     appDelegate.attachMainWindowIfNeeded()
@@ -195,7 +201,14 @@ struct DiskscopeNativeApp: App {
                     }
                     appDelegate.applyWindowLayout(for: .setup)
                 }
+                .onChange(of: store.availableDrives.count) { _ in
+                    guard store.currentScreen == .setup else {
+                        return
+                    }
+                    appDelegate.applyWindowLayout(for: .setup, animated: false)
+                }
         }
+        .windowResizability(.contentSize)
         .commands {
             NativeAppCommands(store: store)
         }
