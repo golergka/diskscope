@@ -66,8 +66,10 @@ struct ContentView: View {
                         ForEach(store.availableDrives) { drive in
                             driveRow(for: drive)
                         }
+                        customFolderRow
                     }
                     .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(height: setupDriveListHeight)
             }
@@ -159,12 +161,55 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(selected ? Color.accentColor.opacity(0.16) : Color.clear)
             )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var customFolderRow: some View {
+        let selected = store.useCustomPath
+        let customPath = store.customPath.isEmpty ? "Not selected" : store.customPath
+
+        return Button {
+            if store.customPath.isEmpty {
+                store.selectFolderFromDialog()
+            } else {
+                store.setCustomTarget(path: store.customPath)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Label("Custom Folder", systemImage: "folder")
+                        .font(.body)
+                        .lineLimit(1)
+                    Text(customPath)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer()
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.16) : Color.clear)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     private var setupDriveListHeight: CGFloat {
-        let visibleRows = max(2, min(store.availableDrives.count, 4))
+        let rowCount = store.availableDrives.count + 1
+        let visibleRows = max(3, min(rowCount, 5))
         return CGFloat(visibleRows) * 48 + 12
     }
 
