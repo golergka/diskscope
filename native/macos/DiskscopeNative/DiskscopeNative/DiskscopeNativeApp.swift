@@ -66,7 +66,7 @@ final class NativeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let driveCount = (store?.availableDrives.count ?? 0) + 1
         let visibleRows = max(3, min(driveCount, 5))
         let driveListHeight = CGFloat(visibleRows) * 48 + 12
-        let baseHeight: CGFloat = 232
+        let baseHeight: CGFloat = 184
         return baseHeight + driveListHeight
     }
 

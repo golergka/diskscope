@@ -60,7 +60,7 @@ struct ContentView: View {
                 }
             }
 
-            GroupBox("Mounted Drives") {
+            GroupBox("Target") {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(store.availableDrives) { drive in
@@ -75,18 +75,6 @@ struct ContentView: View {
             }
 
             HStack(spacing: 10) {
-                Button("Select Folder…") {
-                    store.selectFolderFromDialog()
-                }
-                Spacer()
-            }
-
-            setupTargetSummary
-
-            HStack(spacing: 10) {
-                Text("Profile")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Picker("Profile", selection: $store.profile) {
                     ForEach(NativeProfile.allCases) { profile in
                         Text(profile.title).tag(profile)
@@ -171,70 +159,54 @@ struct ContentView: View {
         let selected = store.useCustomPath
         let customPath = store.customPath.isEmpty ? "Not selected" : store.customPath
 
-        return Button {
-            if store.customPath.isEmpty {
+        return HStack(spacing: 8) {
+            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Label("Custom Folder", systemImage: "folder")
+                    .font(.body)
+                    .lineLimit(1)
+                Text(customPath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+
+            Button("Select Folder…") {
                 store.selectFolderFromDialog()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!selected)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.16) : Color.clear)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if selected {
+                return
+            }
+            if store.customPath.isEmpty {
+                store.setCustomTarget(path: store.activePath)
             } else {
                 store.setCustomTarget(path: store.customPath)
             }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Label("Custom Folder", systemImage: "folder")
-                        .font(.body)
-                        .lineLimit(1)
-                    Text(customPath)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer()
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.16) : Color.clear)
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 
     private var setupDriveListHeight: CGFloat {
         let rowCount = store.availableDrives.count + 1
         let visibleRows = max(3, min(rowCount, 5))
         return CGFloat(visibleRows) * 48 + 12
-    }
-
-    private var setupTargetSummary: some View {
-        HStack(spacing: 8) {
-            Text("Target:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if store.useCustomPath {
-                Label(store.customPath, systemImage: "folder")
-                    .font(.caption)
-                    .lineLimit(1)
-            } else if let drive = store.selectedDriveInfo {
-                Label("\(drive.displayName) (\(drive.path))", systemImage: "internaldrive")
-                    .font(.caption)
-                    .lineLimit(1)
-            } else {
-                Text(store.activePath)
-                    .font(.caption)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-        }
     }
 
     private var resultsScreen: some View {
