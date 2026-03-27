@@ -274,28 +274,49 @@ struct ContentView: View {
     }
 
     private var progressBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
+        let segments = store.capacitySegments
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Text("State: \(store.scanState.label)")
                     .font(.headline)
 
-                ProgressView(value: store.progressFraction)
+                ScanCapacityBarView(
+                    segments: segments,
+                    isRunning: store.scanState == .running
+                )
                     .frame(maxWidth: .infinity)
+                    .frame(height: 22)
 
-                Text("\(store.scannedBytesLabel) / \(store.occupiedBytesLabel)")
+                Text(store.totalSegmentGbLabel)
                     .font(.system(.body, design: .rounded))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .help("Total capacity")
             }
 
             HStack(spacing: 14) {
-                Text("Scanned: \(store.scannedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Occupied: \(store.occupiedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Capacity: \(store.totalBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ScanCapacityLegendItem(
+                    title: "Scanned",
+                    value: store.scannedSegmentGbLabel,
+                    color: ScanCapacityPalette.scanned
+                )
+                ScanCapacityLegendItem(
+                    title: "Deferred",
+                    value: store.deferredSegmentGbLabel,
+                    color: ScanCapacityPalette.deferred
+                )
+                ScanCapacityLegendItem(
+                    title: "Pending",
+                    value: store.remainingSegmentGbLabel,
+                    color: ScanCapacityPalette.remaining
+                )
+                ScanCapacityLegendItem(
+                    title: "Empty",
+                    value: store.emptySegmentGbLabel,
+                    color: ScanCapacityPalette.empty
+                )
 
                 Button {
                     openWindow(id: "scan-errors")
@@ -308,20 +329,19 @@ struct ContentView: View {
                 .buttonStyle(.plain)
 
                 if store.deferredNodeCount > 0 {
-                    Text("Deferred: \(store.deferredNodeCount)")
+                    Text("Deferred nodes: \(store.deferredNodeCount)")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.orange)
                 }
 
                 Spacer()
+
+                Text(store.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-        }
-        .overlay(alignment: .leading) {
-            Text(store.statusLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 48)
         }
         .padding(.bottom, 16)
     }
@@ -657,6 +677,111 @@ private final class InvisibleDividerSplitView: NSSplitView {
 
 }
 
+private enum ScanCapacityPalette {
+    static let scanned = Color(nsColor: .systemBlue)
+    static let deferred = Color(nsColor: .systemOrange)
+    static let remaining = Color(nsColor: .systemYellow)
+    static let empty = Color(nsColor: .tertiaryLabelColor).opacity(0.42)
+    static let track = Color(nsColor: .quaternaryLabelColor).opacity(0.24)
+}
+
+private struct ScanCapacityLegendItem: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text("\(title): \(value)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct ScanCapacityBarView: View {
+    let segments: NativeCapacitySegments
+    let isRunning: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let total = max(Double(segments.totalBytes), 1.0)
+            let barWidth = geometry.size.width
+            let barHeight = geometry.size.height
+            let cornerRadius = barHeight / 2
+            let widthForBytes: (UInt64) -> CGFloat = { bytes in
+                barWidth * CGFloat(Double(bytes) / total)
+            }
+            let scannedWidth = widthForBytes(segments.scannedBytes)
+            let deferredWidth = widthForBytes(segments.deferredBytes)
+            let remainingWidth = widthForBytes(segments.remainingBytes)
+            let emptyWidth = widthForBytes(segments.emptyBytes)
+            let usedWidth = widthForBytes(segments.occupiedBytes)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(ScanCapacityPalette.track)
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(ScanCapacityPalette.scanned)
+                        .frame(width: scannedWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.deferred)
+                        .frame(width: deferredWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.remaining)
+                        .frame(width: remainingWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.empty)
+                        .frame(width: emptyWidth)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                if isRunning && usedWidth > 0 {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        let phase = timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 1.8) / 1.8
+                        let highlightWidth = min(max(usedWidth * 0.25, 42), 140)
+                        let offset = (usedWidth + highlightWidth) * CGFloat(phase) - highlightWidth
+
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0),
+                                Color.white.opacity(0.35),
+                                Color.white.opacity(0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: highlightWidth, height: barHeight)
+                        .offset(x: offset)
+                        .mask {
+                            HStack(spacing: 0) {
+                                Rectangle().frame(width: usedWidth)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .allowsHitTesting(false)
+                }
+
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Disk scan capacity")
+        .accessibilityValue(
+            "Scanned \(segments.scannedBytes) bytes, deferred \(segments.deferredBytes) bytes, pending \(segments.remainingBytes) bytes, empty \(segments.emptyBytes) bytes"
+        )
+    }
+}
 private struct SetupAdvancedSheetView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.dismiss) private var dismiss
@@ -1069,13 +1194,13 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let identifier = NSUserInterfaceItemIdentifier("HierarchySizeCell")
             let cell: NSTableCellView
             let label: NSTextField
-            let deferredIconView: NSImageView
-            let errorIconView: NSImageView
+            let deferredButton: HierarchyStatusButton
+            let errorButton: HierarchyStatusButton
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
                 label = reused.textField ?? NSTextField(labelWithString: "")
-                deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView()
-                errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView()
+                deferredButton = (reused.viewWithTag(1001) as? HierarchyStatusButton) ?? HierarchyStatusButton()
+                errorButton = (reused.viewWithTag(1002) as? HierarchyStatusButton) ?? HierarchyStatusButton()
             } else {
                 cell = NSTableCellView(frame: .zero)
                 cell.identifier = identifier
@@ -1087,81 +1212,135 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 label.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
                 label.textColor = .secondaryLabelColor
 
-                let deferredIconView = NSImageView(frame: .zero)
-                deferredIconView.translatesAutoresizingMaskIntoConstraints = false
-                deferredIconView.imageScaling = .scaleProportionallyDown
-                deferredIconView.contentTintColor = .systemOrange
-                deferredIconView.tag = 1001
-                deferredIconView.isHidden = true
-                deferredIconView.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
+                let statusLane = NSView(frame: .zero)
+                statusLane.translatesAutoresizingMaskIntoConstraints = false
 
-                let errorIconView = NSImageView(frame: .zero)
-                errorIconView.translatesAutoresizingMaskIntoConstraints = false
-                errorIconView.imageScaling = .scaleProportionallyDown
-                errorIconView.contentTintColor = .systemRed
-                errorIconView.tag = 1002
-                errorIconView.isHidden = true
-                errorIconView.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
+                let deferredButton = HierarchyStatusButton(frame: .zero)
+                deferredButton.translatesAutoresizingMaskIntoConstraints = false
+                deferredButton.tag = 1001
+                deferredButton.isBordered = false
+                deferredButton.imagePosition = .imageOnly
+                deferredButton.bezelStyle = .regularSquare
+                deferredButton.imageScaling = .scaleProportionallyDown
+                deferredButton.contentTintColor = .systemOrange
+                deferredButton.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
+                deferredButton.target = self
+                deferredButton.action = #selector(handleDeferredStatusButton(_:))
 
-                let stack = NSStackView(views: [label, deferredIconView, errorIconView])
-                stack.translatesAutoresizingMaskIntoConstraints = false
-                stack.orientation = .horizontal
-                stack.alignment = .centerY
-                stack.spacing = 4
-                stack.distribution = .fill
+                let errorButton = HierarchyStatusButton(frame: .zero)
+                errorButton.translatesAutoresizingMaskIntoConstraints = false
+                errorButton.tag = 1002
+                errorButton.isBordered = false
+                errorButton.imagePosition = .imageOnly
+                errorButton.bezelStyle = .regularSquare
+                errorButton.imageScaling = .scaleProportionallyDown
+                errorButton.contentTintColor = .systemRed
+                errorButton.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
+                errorButton.target = self
+                errorButton.action = #selector(handleErrorStatusButton(_:))
 
                 label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                deferredIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
-                errorIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-                cell.addSubview(stack)
+                statusLane.addSubview(deferredButton)
+                statusLane.addSubview(errorButton)
+                cell.addSubview(label)
+                cell.addSubview(statusLane)
                 cell.textField = label
 
                 NSLayoutConstraint.activate([
-                    stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                    stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-                    stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                    deferredIconView.widthAnchor.constraint(equalToConstant: 12),
-                    deferredIconView.heightAnchor.constraint(equalToConstant: 12),
-                    errorIconView.widthAnchor.constraint(equalToConstant: 12),
-                    errorIconView.heightAnchor.constraint(equalToConstant: 12)
+                    label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                    label.trailingAnchor.constraint(equalTo: statusLane.leadingAnchor, constant: -hierarchySizeToStatusGap),
+                    label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+
+                    statusLane.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                    statusLane.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    statusLane.widthAnchor.constraint(equalToConstant: hierarchyStatusLaneWidth),
+                    statusLane.heightAnchor.constraint(greaterThanOrEqualToConstant: hierarchyStatusIconWidth),
+
+                    deferredButton.leadingAnchor.constraint(equalTo: statusLane.leadingAnchor),
+                    deferredButton.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    deferredButton.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    deferredButton.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+
+                    errorButton.trailingAnchor.constraint(equalTo: statusLane.trailingAnchor),
+                    errorButton.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    errorButton.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    errorButton.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+
+                    deferredButton.trailingAnchor.constraint(
+                        equalTo: errorButton.leadingAnchor,
+                        constant: -hierarchyStatusIconSpacing
+                    )
                 ])
 
                 label.stringValue = parent.store.nodeSizeLabel(node)
-                configureSizeStatusIcons(
+                configureSizeStatusButtons(
                     node: node,
-                    deferredIconView: deferredIconView,
-                    errorIconView: errorIconView
+                    deferredButton: deferredButton,
+                    errorButton: errorButton
                 )
                 return cell
             }
 
             label.stringValue = parent.store.nodeSizeLabel(node)
             label.textColor = .secondaryLabelColor
-            configureSizeStatusIcons(
+            configureSizeStatusButtons(
                 node: node,
-                deferredIconView: deferredIconView,
-                errorIconView: errorIconView
+                deferredButton: deferredButton,
+                errorButton: errorButton
             )
             return cell
         }
 
-        private func configureSizeStatusIcons(
+        private func configureSizeStatusButtons(
             node: NativeNode,
-            deferredIconView: NSImageView,
-            errorIconView: NSImageView
+            deferredButton: HierarchyStatusButton,
+            errorButton: HierarchyStatusButton
         ) {
             let showsDeferred = node.childrenState == .collapsedByThreshold
-            deferredIconView.isHidden = !showsDeferred
-            deferredIconView.toolTip = showsDeferred
-                ? "Deferred: details were collapsed by threshold."
+            deferredButton.nodeId = node.id
+            deferredButton.alphaValue = showsDeferred ? 1 : 0
+            deferredButton.isEnabled = showsDeferred
+            deferredButton.toolTip = showsDeferred
+                ? deferredTooltip(nodeId: node.id)
                 : nil
 
             let showsError = node.errorFlag
-            errorIconView.isHidden = !showsError
-            errorIconView.toolTip = showsError
-                ? "Error: this path could not be fully read."
+            errorButton.nodeId = node.id
+            errorButton.alphaValue = showsError ? 1 : 0
+            errorButton.isEnabled = showsError
+            errorButton.toolTip = showsError
+                ? errorTooltip(nodeId: node.id)
                 : nil
+        }
+
+        private func deferredTooltip(nodeId: UInt64) -> String {
+            let nodePath = parent.store.path(for: nodeId)
+            return """
+            Deferred: subtree details were collapsed by scan threshold.
+            Click to expand by scanning just this subtree.
+            \(nodePath)
+            """
+        }
+
+        private func errorTooltip(nodeId: UInt64) -> String {
+            let nodePath = parent.store.path(for: nodeId)
+            let description = parent.store.nodeErrorDescription(nodeId: nodeId)
+            return """
+            Error: \(description)
+            Click to retry the current scan.
+            \(nodePath)
+            """
+        }
+
+        @objc
+        private func handleDeferredStatusButton(_ sender: HierarchyStatusButton) {
+            parent.store.expandDeferredSubtree(nodeId: sender.nodeId)
+        }
+
+        @objc
+        private func handleErrorStatusButton(_ sender: HierarchyStatusButton) {
+            parent.store.retryNode(nodeId: sender.nodeId)
         }
 
         private func statusIcon(key: String, symbol: String) -> NSImage {
@@ -1264,6 +1443,16 @@ private struct HierarchyOutlineView: NSViewRepresentable {
     }
 }
 
+private let hierarchySizeToStatusGap: CGFloat = 6
+private let hierarchyStatusIconWidth: CGFloat = 12
+private let hierarchyStatusIconSpacing: CGFloat = 4
+private let hierarchyStatusLaneWidth: CGFloat =
+    (hierarchyStatusIconWidth * 2) + hierarchyStatusIconSpacing
+
+private final class HierarchyStatusButton: NSButton {
+    var nodeId: UInt64 = 0
+}
+
 private final class HierarchyOutlineNativeView: NSOutlineView {
     var contextMenuProvider: ((Int) -> NSMenu?)?
 
@@ -1283,14 +1472,13 @@ private final class HierarchyOutlineNativeView: NSOutlineView {
 }
 
 private final class HierarchyOutlineContainerView: NSView {
-    private let reloadMinIntervalSeconds: CFAbsoluteTime = 0.2
+    private let minReloadIntervalIdleSeconds: CFAbsoluteTime = 0.16
+    private let minReloadIntervalScanningSeconds: CFAbsoluteTime = 1.0
+    private let maxReloadIntervalScanningSeconds: CFAbsoluteTime = 3.0
     private let fullReloadRowLimit = 2_000
     private let minSizeColumnWidth: CGFloat = 108
     private let maxSizeColumnWidth: CGFloat = 260
     private let sizeColumnPadding: CGFloat = 16
-    private let sizeToStatusGap: CGFloat = 6
-    private let statusIconWidth: CGFloat = 12
-    private let statusIconSpacing: CGFloat = 4
     private let sizeValueFont = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
 
     private let scrollView = NSScrollView()
@@ -1467,8 +1655,9 @@ private final class HierarchyOutlineContainerView: NSView {
 
     private func scheduleVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
         let now = CFAbsoluteTimeGetCurrent()
+        let interval = reloadIntervalSeconds()
         let elapsed = now - lastReloadAt
-        if elapsed >= reloadMinIntervalSeconds {
+        if elapsed >= interval {
             performVersionRefresh(coordinator: coordinator)
             return
         }
@@ -1478,7 +1667,10 @@ private final class HierarchyOutlineContainerView: NSView {
         }
         reloadScheduled = true
         let generation = reloadGeneration
-        let delay = reloadMinIntervalSeconds - elapsed
+        let delay = interval - elapsed
+        NativeDiagnostics.debug(
+            "outline_refresh_scheduled delay=\(String(format: "%.3f", max(0, delay))) version=\(version) backlog=\(store?.pendingPatchBacklog ?? 0)"
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self, weak coordinator] in
             guard let self else {
                 return
@@ -1492,12 +1684,29 @@ private final class HierarchyOutlineContainerView: NSView {
         }
     }
 
+    private func reloadIntervalSeconds() -> CFAbsoluteTime {
+        guard let store else {
+            return minReloadIntervalIdleSeconds
+        }
+        if store.scanState == .running {
+            if store.pendingPatchBacklog >= 24_000 {
+                return maxReloadIntervalScanningSeconds
+            }
+            if store.pendingPatchBacklog >= 8_000 {
+                return 2.0
+            }
+            return minReloadIntervalScanningSeconds
+        }
+        return minReloadIntervalIdleSeconds
+    }
+
     private func performVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
         guard configured, store?.node(rootId) != nil else {
             return
         }
 
         let refreshStartedAt = CFAbsoluteTimeGetCurrent()
+        lastReloadAt = refreshStartedAt
         let didFullReload = outlineView.numberOfRows <= fullReloadRowLimit
         if didFullReload {
             outlineView.reloadData()
@@ -1506,14 +1715,13 @@ private final class HierarchyOutlineContainerView: NSView {
             refreshVisibleRows()
         }
         fitSizeColumnToContent(coordinator: coordinator)
-        lastReloadAt = CFAbsoluteTimeGetCurrent()
 
         if didFullReload || !isSelectionSynchronized(coordinator: coordinator) {
             syncSelection(coordinator: coordinator)
         }
 
         let refreshMode = didFullReload ? "full" : "visible"
-        let details = "mode=\(refreshMode) rows=\(outlineView.numberOfRows) selected=\(selectedId)"
+        let details = "mode=\(refreshMode) rows=\(outlineView.numberOfRows) selected=\(selectedId) version=\(version)"
         NativeDiagnostics.slowPath(
             "outline_refresh",
             startedAt: refreshStartedAt,
@@ -1674,20 +1882,7 @@ private final class HierarchyOutlineContainerView: NSView {
 
             let sizeText = store.nodeSizeLabel(node)
             var width = (sizeText as NSString).size(withAttributes: [.font: sizeValueFont]).width
-            let hasDeferred = node.childrenState == .collapsedByThreshold
-            let hasError = node.errorFlag
-            if hasDeferred || hasError {
-                width += sizeToStatusGap
-                if hasDeferred {
-                    width += statusIconWidth
-                }
-                if hasDeferred && hasError {
-                    width += statusIconSpacing
-                }
-                if hasError {
-                    width += statusIconWidth
-                }
-            }
+            width += hierarchySizeToStatusGap + hierarchyStatusLaneWidth
 
             if width > widest {
                 widest = width
@@ -1696,8 +1891,8 @@ private final class HierarchyOutlineContainerView: NSView {
 
         if widest == 0 {
             widest = ("999.99 GiB" as NSString).size(withAttributes: [.font: sizeValueFont]).width
-                + sizeToStatusGap
-                + statusIconWidth
+                + hierarchySizeToStatusGap
+                + hierarchyStatusLaneWidth
         }
 
         let padded = widest + sizeColumnPadding

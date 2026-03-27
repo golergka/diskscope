@@ -42,6 +42,8 @@ private struct LayoutWorkItem {
 
 private struct LayoutFrame {
     let generation: UInt64
+    let modelVersion: UInt64
+    let rootId: UInt64
     let rects: [TreemapRect]
     let exploredBounds: CGRect
     let isFinal: Bool
@@ -102,6 +104,8 @@ final class TreemapCanvas: NSView {
     private var layoutDirty = false
     private var layoutInFlight = false
     private var lastLayoutKickAt: CFAbsoluteTime = 0
+    private var lastCommittedRootId: UInt64 = UInt64.max
+    private var lastCommittedModelVersion: UInt64 = 0
 
     private let generationLock = NSLock()
     private var latestLayoutGeneration: UInt64 = 0
@@ -363,7 +367,11 @@ final class TreemapCanvas: NSView {
         }
 
         let generation = reserveLayoutGeneration()
+        let layoutModelVersion = modelVersion
         layoutInFlight = true
+        NativeDiagnostics.debug(
+            "treemap_layout_launch gen=\(generation) version=\(layoutModelVersion) root=\(rootId) explored=\(String(format: "%.4f", exploredFraction)) backlog=\(store.pendingPatchBacklog)"
+        )
 
         NativeDiagnostics.slowPath(
             "treemap_snapshot",
@@ -376,7 +384,11 @@ final class TreemapCanvas: NSView {
             guard let self else {
                 return
             }
-            self.computeLayoutProgressively(snapshot: snapshot, generation: generation)
+            self.computeLayoutProgressively(
+                snapshot: snapshot,
+                generation: generation,
+                modelVersion: layoutModelVersion
+            )
         }
     }
 
@@ -481,7 +493,11 @@ final class TreemapCanvas: NSView {
         return LayoutSnapshot(rootId: rootId, nodes: snapshots, exploredBounds: exploredBounds)
     }
 
-    private func computeLayoutProgressively(snapshot: LayoutSnapshot, generation: UInt64) {
+    private func computeLayoutProgressively(
+        snapshot: LayoutSnapshot,
+        generation: UInt64,
+        modelVersion: UInt64
+    ) {
         let startedAt = CFAbsoluteTimeGetCurrent()
 
         var output: [TreemapRect] = []
@@ -590,6 +606,8 @@ final class TreemapCanvas: NSView {
             emitLayoutFrame(
                 LayoutFrame(
                     generation: generation,
+                    modelVersion: modelVersion,
+                    rootId: snapshot.rootId,
                     rects: output,
                     exploredBounds: snapshot.exploredBounds,
                     isFinal: isFinal
@@ -608,6 +626,8 @@ final class TreemapCanvas: NSView {
             emitLayoutFrame(
                 LayoutFrame(
                     generation: generation,
+                    modelVersion: modelVersion,
+                    rootId: snapshot.rootId,
                     rects: [],
                     exploredBounds: snapshot.exploredBounds,
                     isFinal: true
@@ -634,14 +654,55 @@ final class TreemapCanvas: NSView {
                 return
             }
 
+            // Progressive recompute can transiently emit empty snapshots while patches are still in flight.
+            // Keep the last committed frame to avoid visual blank flashes.
+            if frame.rects.isEmpty && !frame.isFinal {
+                NativeDiagnostics.debug(
+                    "treemap_frame_skip_empty_intermediate gen=\(frame.generation) version=\(frame.modelVersion) root=\(frame.rootId)"
+                )
+                return
+            }
+            if self.shouldPreserveCommittedLayout(for: frame) {
+                self.exploredBounds = frame.exploredBounds
+                if frame.isFinal {
+                    self.layoutInFlight = false
+                }
+                NativeDiagnostics.debug(
+                    "treemap_frame_preserve_committed gen=\(frame.generation) version=\(frame.modelVersion) root=\(frame.rootId) prev_rects=\(self.rects.count)"
+                )
+                self.needsDisplay = true
+                return
+            }
+
             self.rects = frame.rects
             self.exploredBounds = frame.exploredBounds
+            self.lastCommittedRootId = frame.rootId
+            self.lastCommittedModelVersion = frame.modelVersion
             self.rebuildSharedBorders()
             if frame.isFinal {
                 self.layoutInFlight = false
             }
+            NativeDiagnostics.debug(
+                "treemap_frame_apply gen=\(frame.generation) version=\(frame.modelVersion) root=\(frame.rootId) rects=\(frame.rects.count) final=\(frame.isFinal)"
+            )
             self.needsDisplay = true
         }
+    }
+
+    private func shouldPreserveCommittedLayout(for frame: LayoutFrame) -> Bool {
+        guard frame.isFinal,
+              frame.rects.isEmpty,
+              !rects.isEmpty,
+              rootId == lastCommittedRootId else {
+            return false
+        }
+
+        // While scan patches are still streaming, keep the previous committed layout instead of
+        // replacing it with an empty final frame from an intermediate snapshot.
+        guard let store, store.scanState == .running else {
+            return false
+        }
+        return frame.modelVersion >= lastCommittedModelVersion
     }
 
     private func clearLayout(exploredBounds: CGRect = .zero) {
