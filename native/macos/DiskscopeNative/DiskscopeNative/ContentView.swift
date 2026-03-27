@@ -271,28 +271,49 @@ struct ContentView: View {
     }
 
     private var progressBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
+        let segments = store.capacitySegments
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Text("State: \(store.scanState.label)")
                     .font(.headline)
 
-                ProgressView(value: store.progressFraction)
+                ScanCapacityBarView(
+                    segments: segments,
+                    isRunning: store.scanState == .running
+                )
                     .frame(maxWidth: .infinity)
+                    .frame(height: 22)
 
-                Text("\(store.scannedBytesLabel) / \(store.occupiedBytesLabel)")
+                Text(store.totalSegmentGbLabel)
                     .font(.system(.body, design: .rounded))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .help("Total capacity")
             }
 
             HStack(spacing: 14) {
-                Text("Scanned: \(store.scannedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Occupied: \(store.occupiedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Capacity: \(store.totalBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ScanCapacityLegendItem(
+                    title: "Scanned",
+                    value: store.scannedSegmentGbLabel,
+                    color: ScanCapacityPalette.scanned
+                )
+                ScanCapacityLegendItem(
+                    title: "Deferred",
+                    value: store.deferredSegmentGbLabel,
+                    color: ScanCapacityPalette.deferred
+                )
+                ScanCapacityLegendItem(
+                    title: "Pending",
+                    value: store.remainingSegmentGbLabel,
+                    color: ScanCapacityPalette.remaining
+                )
+                ScanCapacityLegendItem(
+                    title: "Empty",
+                    value: store.emptySegmentGbLabel,
+                    color: ScanCapacityPalette.empty
+                )
 
                 Button {
                     openWindow(id: "scan-errors")
@@ -305,20 +326,19 @@ struct ContentView: View {
                 .buttonStyle(.plain)
 
                 if store.deferredNodeCount > 0 {
-                    Text("Deferred: \(store.deferredNodeCount)")
+                    Text("Deferred nodes: \(store.deferredNodeCount)")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.orange)
                 }
 
                 Spacer()
+
+                Text(store.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-        }
-        .overlay(alignment: .leading) {
-            Text(store.statusLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 48)
         }
         .padding(.bottom, 16)
     }
@@ -462,6 +482,112 @@ struct ContentView: View {
         if alert.runModal() == .alertFirstButtonReturn {
             store.moveNodeToTrash(nodeId: nodeId)
         }
+    }
+}
+
+private enum ScanCapacityPalette {
+    static let scanned = Color(nsColor: .systemBlue)
+    static let deferred = Color(nsColor: .systemOrange)
+    static let remaining = Color(nsColor: .systemYellow)
+    static let empty = Color(nsColor: .tertiaryLabelColor).opacity(0.42)
+    static let track = Color(nsColor: .quaternaryLabelColor).opacity(0.24)
+}
+
+private struct ScanCapacityLegendItem: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text("\(title): \(value)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct ScanCapacityBarView: View {
+    let segments: NativeCapacitySegments
+    let isRunning: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let total = max(Double(segments.totalBytes), 1.0)
+            let barWidth = geometry.size.width
+            let barHeight = geometry.size.height
+            let cornerRadius = barHeight / 2
+            let widthForBytes: (UInt64) -> CGFloat = { bytes in
+                barWidth * CGFloat(Double(bytes) / total)
+            }
+            let scannedWidth = widthForBytes(segments.scannedBytes)
+            let deferredWidth = widthForBytes(segments.deferredBytes)
+            let remainingWidth = widthForBytes(segments.remainingBytes)
+            let emptyWidth = widthForBytes(segments.emptyBytes)
+            let usedWidth = widthForBytes(segments.occupiedBytes)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(ScanCapacityPalette.track)
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(ScanCapacityPalette.scanned)
+                        .frame(width: scannedWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.deferred)
+                        .frame(width: deferredWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.remaining)
+                        .frame(width: remainingWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.empty)
+                        .frame(width: emptyWidth)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                if isRunning && usedWidth > 0 {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        let phase = timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 1.8) / 1.8
+                        let highlightWidth = min(max(usedWidth * 0.25, 42), 140)
+                        let offset = (usedWidth + highlightWidth) * CGFloat(phase) - highlightWidth
+
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0),
+                                Color.white.opacity(0.35),
+                                Color.white.opacity(0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: highlightWidth, height: barHeight)
+                        .offset(x: offset)
+                        .mask {
+                            HStack(spacing: 0) {
+                                Rectangle().frame(width: usedWidth)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .allowsHitTesting(false)
+                }
+
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Disk scan capacity")
+        .accessibilityValue(
+            "Scanned \(segments.scannedBytes) bytes, deferred \(segments.deferredBytes) bytes, pending \(segments.remainingBytes) bytes, empty \(segments.emptyBytes) bytes"
+        )
     }
 }
 
