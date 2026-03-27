@@ -101,6 +101,34 @@ Paid upgrade behavior:
 - Xcode 16+
 - Rust stable toolchain
 
+### Local install (recommended)
+
+From repo root:
+
+```bash
+./scripts/install-native-app.sh --clean
+```
+
+This builds `DiskscopeNative.app` and installs it into `~/Applications/DiskscopeNative.app`, then launches it.
+
+Useful variants:
+
+```bash
+# install for all users (admin permissions may be required)
+./scripts/install-native-app.sh --system --clean
+
+# reinstall without auto-launch
+./scripts/install-native-app.sh --clean --no-open
+```
+
+After install, you can relaunch anytime with:
+
+```bash
+open -a "$HOME/Applications/DiskscopeNative.app"
+```
+
+If you removed the app bundle or want a fresh rebuild, rerun the installer command.
+
 ### Build (manual, optional)
 
 From repo root:

@@ -71,6 +71,39 @@ flowchart LR
 
 ## Build and run
 
+### Local install script (recommended)
+
+From repo root:
+
+```bash
+./scripts/install-native-app.sh --clean
+```
+
+Behavior:
+- builds `DiskscopeNative.app` with deterministic `xcodebuild` derived data path.
+- installs bundle to `~/Applications/DiskscopeNative.app`.
+- launches installed app.
+
+Common options:
+
+```bash
+# install into /Applications
+./scripts/install-native-app.sh --system --clean
+
+# keep current build artifacts, reinstall app only
+./scripts/install-native-app.sh --no-open
+```
+
+Relaunch installed app:
+
+```bash
+open -a "$HOME/Applications/DiskscopeNative.app"
+```
+
+If the app was removed, rerun the install script.
+
+### Manual build
+
 From repo root:
 
 ```bash
