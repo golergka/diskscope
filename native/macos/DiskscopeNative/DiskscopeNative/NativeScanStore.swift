@@ -239,6 +239,15 @@ struct NativeProgress {
     var elapsedMs: UInt64 = 0
 }
 
+struct NativeCapacitySegments {
+    var scannedBytes: UInt64
+    var deferredBytes: UInt64
+    var remainingBytes: UInt64
+    var emptyBytes: UInt64
+    var occupiedBytes: UInt64
+    var totalBytes: UInt64
+}
+
 struct NativeLaunchOptions {
     var autoStart: Bool = false
     var pathOverride: String?
@@ -404,6 +413,7 @@ final class NativeScanStore: ObservableObject {
     @Published private(set) var pendingPatchBacklog: Int = 0
     @Published private(set) var errorNodeCount: Int = 0
     @Published private(set) var deferredNodeCount: Int = 0
+    @Published private(set) var deferredCollapsedBytes: UInt64 = 0
     @Published private(set) var runtimeErrors: [NativeRuntimeErrorEntry] = []
     @Published private(set) var proAvailable: Bool = false
     @Published private(set) var proEnabled: Bool = false
@@ -565,8 +575,62 @@ final class NativeScanStore: ObservableObject {
         NativeScanStore.humanBytes(progress.totalBytes)
     }
 
+    var capacitySegments: NativeCapacitySegments {
+        let occupied = occupiedProgressBytes
+        let scanned = min(progress.bytesSeen, occupied)
+        let deferred = min(deferredCollapsedBytes, scanned)
+        let scannedDetailed = NativeScanStore.saturatingSubtract(scanned, deferred)
+        let remaining = NativeScanStore.saturatingSubtract(occupied, scanned)
+        let total: UInt64
+        if progress.totalBytes > 0 {
+            total = max(progress.totalBytes, occupied)
+        } else {
+            total = occupied
+        }
+        let empty = NativeScanStore.saturatingSubtract(total, occupied)
+
+        return NativeCapacitySegments(
+            scannedBytes: scannedDetailed,
+            deferredBytes: deferred,
+            remainingBytes: remaining,
+            emptyBytes: empty,
+            occupiedBytes: occupied,
+            totalBytes: total
+        )
+    }
+
+    var scannedSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.scannedBytes)
+    }
+
+    var deferredSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.deferredBytes)
+    }
+
+    var remainingSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.remainingBytes)
+    }
+
+    var emptySegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.emptyBytes)
+    }
+
+    var totalSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.totalBytes)
+    }
+
+    private var occupiedProgressBytes: UInt64 {
+        if progress.occupiedBytes > 0 {
+            return progress.occupiedBytes
+        }
+        if progress.targetBytes > 0 {
+            return progress.targetBytes
+        }
+        return progress.bytesSeen
+    }
+
     var progressFraction: Double {
-        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+        let denominator = occupiedProgressBytes
         guard denominator > 0 else {
             return 0
         }
@@ -575,7 +639,7 @@ final class NativeScanStore: ObservableObject {
     }
 
     var exploredFraction: Double {
-        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+        let denominator = occupiedProgressBytes
         guard denominator > 0 else {
             return progress.bytesSeen > 0 ? 1.0 : 0.0
         }
@@ -1242,6 +1306,7 @@ final class NativeScanStore: ObservableObject {
         let previousSize = existing?.sizeBytes
         let previousErrorFlag = existing?.errorFlag ?? false
         let previousDeferred = existing?.childrenState == .collapsedByThreshold
+        let previousDeferredBytes = previousDeferred ? (existing?.sizeBytes ?? 0) : 0
 
         var node = existing ?? NativeNode(
             id: patch.id,
@@ -1285,6 +1350,19 @@ final class NativeScanStore: ObservableObject {
             } else {
                 deferredNodeCount = max(0, deferredNodeCount - 1)
             }
+        }
+
+        let nowDeferredBytes = nowDeferred ? patch.sizeBytes : 0
+        if nowDeferredBytes > previousDeferredBytes {
+            deferredCollapsedBytes = NativeScanStore.saturatingAdd(
+                deferredCollapsedBytes,
+                nowDeferredBytes - previousDeferredBytes
+            )
+        } else if previousDeferredBytes > nowDeferredBytes {
+            deferredCollapsedBytes = NativeScanStore.saturatingSubtract(
+                deferredCollapsedBytes,
+                previousDeferredBytes - nowDeferredBytes
+            )
         }
 
         if let oldParent = previousParent, oldParent != patch.parentId, var parent = nodes[oldParent] {
@@ -1335,6 +1413,7 @@ final class NativeScanStore: ObservableObject {
         pendingPatchBacklog = 0
         errorNodeCount = 0
         deferredNodeCount = 0
+        deferredCollapsedBytes = 0
         runtimeErrors.removeAll(keepingCapacity: true)
         errorNodeIds.removeAll(keepingCapacity: true)
         rootNodeId = 0
@@ -1593,7 +1672,7 @@ final class NativeScanStore: ObservableObject {
 
     private func updateDockTileProgress() {
         if scanState == .running {
-            let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+            let denominator = occupiedProgressBytes
             guard denominator > 0 else {
                 dockProgress.setProgress(0)
                 return
@@ -1701,6 +1780,20 @@ final class NativeScanStore: ObservableObject {
             idx += 1
         }
         return String(format: "%.2f %@", value, units[idx])
+    }
+
+    private static func humanGigabytes(_ bytes: UInt64) -> String {
+        let gigabytes = Double(bytes) / 1_000_000_000.0
+        return String(format: "%.1f GB", gigabytes)
+    }
+
+    private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : sum
+    }
+
+    private static func saturatingSubtract(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        lhs >= rhs ? lhs - rhs : 0
     }
 
     private func parsedPositiveInt(_ text: String) -> Int? {
