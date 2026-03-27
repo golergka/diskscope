@@ -752,6 +752,41 @@ final class NativeScanStore: ObservableObject {
         startScan()
     }
 
+    func expandDeferredSubtree(nodeId: UInt64) {
+        guard let node = nodes[nodeId],
+              node.childrenState == .collapsedByThreshold else {
+            NSSound.beep()
+            return
+        }
+
+        let subtreePath = path(for: nodeId)
+        let priorThreshold = thresholdOverrideText
+        let usesAutoThreshold = parsedPositiveUInt64(priorThreshold) == nil
+        if usesAutoThreshold {
+            // Use the smallest positive threshold to force full detail for the expanded subtree.
+            thresholdOverrideText = "1"
+        }
+
+        customPath = subtreePath
+        useCustomPath = true
+        statusLine = "Expanding deferred subtree: \(subtreePath)"
+        startScan()
+
+        if usesAutoThreshold {
+            thresholdOverrideText = priorThreshold
+        }
+    }
+
+    func retryNode(nodeId: UInt64) {
+        guard let node = nodes[nodeId], node.errorFlag else {
+            NSSound.beep()
+            return
+        }
+
+        statusLine = "Retrying scan for \(path(for: nodeId))..."
+        startScan()
+    }
+
     func resetZoom() {
         guard zoomNodeId != rootNodeId else {
             return
@@ -859,6 +894,19 @@ final class NativeScanStore: ObservableObject {
             path.appendPathComponent(segment)
         }
         return path.path
+    }
+
+    func nodeErrorDescription(nodeId: UInt64) -> String {
+        guard let node = nodes[nodeId], node.errorFlag else {
+            return "This path could not be fully read."
+        }
+
+        switch node.kind {
+        case .directory, .collapsedDirectory:
+            return "Directory could not be fully read (permission denied or I/O error)."
+        case .file:
+            return "File metadata could not be fully read (permission denied or I/O error)."
+        }
     }
 
     func isExpandable(_ node: NativeNode) -> Bool {
