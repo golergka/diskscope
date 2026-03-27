@@ -199,6 +199,11 @@ Native macOS frontend currently includes:
 - AppKit treemap with area proportional to bytes.
 - treemap layout is computed off the UI thread with generation-cancelled progressive depth updates.
 - layout cadence adapts during scan (`~1-3s`) based on patch backlog to keep UI responsive.
+- right-click context menus in hierarchy and treemap for node actions:
+  - `Show in Finder`
+  - `Reveal Parent in Finder`
+  - `Copy Path`
+  - `Delete…` (confirmation dialog, move-to-trash)
 - treemap fill area scaled by explored/occupied ratio (unexplored area remains blank).
 - treemap uses glossy shading and single-pass shared borders (no multi-thick nested edges).
 - tree/treemap selection + zoom sync by stable node ID.

@@ -377,6 +377,9 @@ struct ContentView: View {
                 },
                 onExpandedChanged: { nodeId, expanded in
                     store.setExpanded(nodeId: nodeId, expanded: expanded)
+                },
+                onContextAction: { nodeId, action in
+                    handleNodeContextAction(nodeId: nodeId, action: action)
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -410,6 +413,9 @@ struct ContentView: View {
                 },
                 onZoom: { nodeId in
                     store.zoom(to: nodeId)
+                },
+                onContextAction: { nodeId, action in
+                    handleNodeContextAction(nodeId: nodeId, action: action)
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -419,6 +425,43 @@ struct ContentView: View {
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func handleNodeContextAction(nodeId: UInt64, action: NativeNodeContextAction) {
+        guard store.node(nodeId) != nil else {
+            return
+        }
+
+        switch action {
+        case .showInFinder:
+            store.showNodeInFinder(nodeId: nodeId)
+        case .revealParentInFinder:
+            store.revealNodeParentInFinder(nodeId: nodeId)
+        case .copyPath:
+            store.copyNodePath(nodeId: nodeId)
+        case .deleteToTrash:
+            confirmDelete(nodeId: nodeId)
+        }
+    }
+
+    private func confirmDelete(nodeId: UInt64) {
+        guard store.canDeleteNode(nodeId: nodeId),
+              let node = store.node(nodeId) else {
+            NSSound.beep()
+            return
+        }
+
+        let fullPath = store.path(for: nodeId)
+        let itemName = node.name.isEmpty ? fullPath : node.name
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Move “\(itemName)” to Trash?"
+        alert.informativeText = fullPath
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            store.moveNodeToTrash(nodeId: nodeId)
+        }
     }
 }
 
@@ -593,6 +636,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
     let onSelect: (UInt64) -> Void
     let onZoom: (UInt64) -> Void
     let onExpandedChanged: (UInt64, Bool) -> Void
+    let onContextAction: (UInt64, NativeNodeContextAction) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -631,9 +675,72 @@ private struct HierarchyOutlineView: NSViewRepresentable {
         var parent: HierarchyOutlineView
         private var childrenCache: [UInt64: ChildCacheEntry] = [:]
         private var iconCache: [String: NSImage] = [:]
+        private var contextNodeId: UInt64?
 
         init(parent: HierarchyOutlineView) {
             self.parent = parent
+        }
+
+        func contextMenu(for row: Int, in outlineView: NSOutlineView) -> NSMenu? {
+            guard row >= 0,
+                  let item = outlineView.item(atRow: row),
+                  let nodeId = nodeId(from: item),
+                  parent.store.node(nodeId) != nil else {
+                return nil
+            }
+
+            contextNodeId = nodeId
+            let menu = NSMenu(title: "Node")
+            menu.autoenablesItems = false
+
+            let showItem = contextMenuItem(
+                title: "Show in Finder",
+                action: .showInFinder,
+                enabled: true
+            )
+            let revealParentItem = contextMenuItem(
+                title: "Reveal Parent in Finder",
+                action: .revealParentInFinder,
+                enabled: true
+            )
+            let copyPathItem = contextMenuItem(
+                title: "Copy Path",
+                action: .copyPath,
+                enabled: true
+            )
+            let deleteItem = contextMenuItem(
+                title: "Delete…",
+                action: .deleteToTrash,
+                enabled: parent.store.canDeleteNode(nodeId: nodeId)
+            )
+
+            menu.items = [showItem, revealParentItem, copyPathItem, NSMenuItem.separator(), deleteItem]
+            return menu
+        }
+
+        private func contextMenuItem(
+            title: String,
+            action: NativeNodeContextAction,
+            enabled: Bool
+        ) -> NSMenuItem {
+            let item = NSMenuItem(
+                title: title,
+                action: #selector(handleContextMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.tag = action.rawValue
+            item.isEnabled = enabled
+            return item
+        }
+
+        @objc
+        private func handleContextMenuAction(_ sender: NSMenuItem) {
+            guard let nodeId = contextNodeId,
+                  let action = NativeNodeContextAction(rawValue: sender.tag) else {
+                return
+            }
+            parent.onContextAction(nodeId, action)
         }
 
         func resetAllCaches() {
@@ -965,6 +1072,24 @@ private struct HierarchyOutlineView: NSViewRepresentable {
     }
 }
 
+private final class HierarchyOutlineNativeView: NSOutlineView {
+    var contextMenuProvider: ((Int) -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let clicked = row(at: point)
+        let targetRow = clicked >= 0 ? clicked : selectedRow
+        guard targetRow >= 0 else {
+            return nil
+        }
+
+        if selectedRow != targetRow {
+            selectRowIndexes(IndexSet(integer: targetRow), byExtendingSelection: false)
+        }
+        return contextMenuProvider?(targetRow)
+    }
+}
+
 private final class HierarchyOutlineContainerView: NSView {
     private let reloadMinIntervalSeconds: CFAbsoluteTime = 0.2
     private let fullReloadRowLimit = 2_000
@@ -977,7 +1102,7 @@ private final class HierarchyOutlineContainerView: NSView {
     private let sizeValueFont = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
 
     private let scrollView = NSScrollView()
-    private let outlineView = NSOutlineView()
+    private let outlineView = HierarchyOutlineNativeView()
     private let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchyNameColumn"))
     private let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HierarchySizeColumn"))
 
@@ -1104,6 +1229,12 @@ private final class HierarchyOutlineContainerView: NSView {
         outlineView.delegate = coordinator
         outlineView.target = coordinator
         outlineView.doubleAction = #selector(HierarchyOutlineView.Coordinator.handleDoubleClick(_:))
+        outlineView.contextMenuProvider = { [weak coordinator, weak outlineView] row in
+            guard let coordinator, let outlineView else {
+                return nil
+            }
+            return coordinator.contextMenu(for: row, in: outlineView)
+        }
         configured = true
         fitSizeColumnToContent(coordinator: coordinator)
     }

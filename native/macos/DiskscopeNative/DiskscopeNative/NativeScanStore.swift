@@ -170,6 +170,13 @@ enum NativeUpgradeCtaTarget: Equatable {
     case inAppPurchase
 }
 
+enum NativeNodeContextAction: Int {
+    case showInFinder = 1
+    case revealParentInFinder = 2
+    case copyPath = 3
+    case deleteToTrash = 4
+}
+
 struct NativeUpgradePrompt: Identifiable, Equatable {
     let id = UUID()
     let title: String
@@ -884,6 +891,77 @@ final class NativeScanStore: ObservableObject {
             }
         case .final:
             return NativeScanStore.humanBytes(node.sizeBytes)
+        }
+    }
+
+    func canDeleteNode(nodeId: UInt64) -> Bool {
+        guard nodes[nodeId] != nil else {
+            return false
+        }
+        return nodeId != rootNodeId
+    }
+
+    func showNodeInFinder(nodeId: UInt64) {
+        guard nodes[nodeId] != nil else {
+            return
+        }
+        let path = path(for: nodeId)
+        let url = URL(fileURLWithPath: path)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealNodeParentInFinder(nodeId: UInt64) {
+        guard nodes[nodeId] != nil else {
+            return
+        }
+        let path = path(for: nodeId)
+        let parentPath = (path as NSString).deletingLastPathComponent
+        let revealRoot = parentPath.isEmpty ? "/" : parentPath
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: revealRoot)
+    }
+
+    func copyNodePath(nodeId: UInt64) {
+        guard nodes[nodeId] != nil else {
+            return
+        }
+        let fullPath = path(for: nodeId)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(fullPath, forType: .string)
+        statusLine = "Copied path: \(fullPath)"
+    }
+
+    func moveNodeToTrash(nodeId: UInt64) {
+        guard canDeleteNode(nodeId: nodeId), nodes[nodeId] != nil else {
+            NSSound.beep()
+            return
+        }
+
+        let fullPath = path(for: nodeId)
+        statusLine = "Moving to Trash: \(fullPath)"
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fileManager = FileManager.default
+            let sourceURL = URL(fileURLWithPath: fullPath)
+            do {
+                var trashedURL: NSURL?
+                try fileManager.trashItem(at: sourceURL, resultingItemURL: &trashedURL)
+                DispatchQueue.main.async {
+                    guard let self else {
+                        return
+                    }
+                    self.statusLine = "Moved to Trash. Rescan to refresh."
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else {
+                        return
+                    }
+                    let message = "Delete failed for \(fullPath): \(error.localizedDescription)"
+                    self.statusLine = message
+                    self.appendRuntimeError(message)
+                }
+            }
         }
     }
 

@@ -55,11 +55,13 @@ struct TreemapView: NSViewRepresentable {
     let exploredFraction: Double
     let onSelect: (UInt64) -> Void
     let onZoom: (UInt64) -> Void
+    let onContextAction: (UInt64, NativeNodeContextAction) -> Void
 
     func makeNSView(context: Context) -> TreemapCanvas {
         let view = TreemapCanvas()
         view.onSelect = onSelect
         view.onZoom = onZoom
+        view.onContextAction = onContextAction
         view.update(
             store: store,
             rootId: rootId,
@@ -73,6 +75,7 @@ struct TreemapView: NSViewRepresentable {
     func updateNSView(_ nsView: TreemapCanvas, context: Context) {
         nsView.onSelect = onSelect
         nsView.onZoom = onZoom
+        nsView.onContextAction = onContextAction
         nsView.update(
             store: store,
             rootId: rootId,
@@ -121,6 +124,7 @@ final class TreemapCanvas: NSView {
 
     var onSelect: ((UInt64) -> Void)?
     var onZoom: ((UInt64) -> Void)?
+    var onContextAction: ((UInt64, NativeNodeContextAction) -> Void)?
 
     override var isFlipped: Bool {
         true
@@ -216,6 +220,63 @@ final class TreemapCanvas: NSView {
         if event.clickCount >= 2 {
             onZoom?(hit)
         }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let hit = hitNode(at: point), store?.node(hit) != nil else {
+            return nil
+        }
+
+        onSelect?(hit)
+
+        let menu = NSMenu(title: "Node")
+        menu.autoenablesItems = false
+        menu.items = [
+            makeContextMenuItem(title: "Show in Finder", action: .showInFinder, nodeId: hit, enabled: true),
+            makeContextMenuItem(
+                title: "Reveal Parent in Finder",
+                action: .revealParentInFinder,
+                nodeId: hit,
+                enabled: true
+            ),
+            makeContextMenuItem(title: "Copy Path", action: .copyPath, nodeId: hit, enabled: true),
+            NSMenuItem.separator(),
+            makeContextMenuItem(
+                title: "Delete…",
+                action: .deleteToTrash,
+                nodeId: hit,
+                enabled: store?.canDeleteNode(nodeId: hit) ?? false
+            )
+        ]
+        return menu
+    }
+
+    private func makeContextMenuItem(
+        title: String,
+        action: NativeNodeContextAction,
+        nodeId: UInt64,
+        enabled: Bool
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(handleContextMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.tag = action.rawValue
+        item.isEnabled = enabled
+        item.representedObject = NSNumber(value: nodeId)
+        return item
+    }
+
+    @objc
+    private func handleContextMenuAction(_ sender: NSMenuItem) {
+        guard let represented = sender.representedObject as? NSNumber,
+              let action = NativeNodeContextAction(rawValue: sender.tag) else {
+            return
+        }
+        onContextAction?(represented.uint64Value, action)
     }
 
     private func hitNode(at point: CGPoint) -> UInt64? {
