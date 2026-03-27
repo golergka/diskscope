@@ -1091,7 +1091,9 @@ private final class HierarchyOutlineNativeView: NSOutlineView {
 }
 
 private final class HierarchyOutlineContainerView: NSView {
-    private let reloadMinIntervalSeconds: CFAbsoluteTime = 0.2
+    private let minReloadIntervalIdleSeconds: CFAbsoluteTime = 0.16
+    private let minReloadIntervalScanningSeconds: CFAbsoluteTime = 1.0
+    private let maxReloadIntervalScanningSeconds: CFAbsoluteTime = 3.0
     private let fullReloadRowLimit = 2_000
     private let minSizeColumnWidth: CGFloat = 108
     private let maxSizeColumnWidth: CGFloat = 260
@@ -1274,8 +1276,9 @@ private final class HierarchyOutlineContainerView: NSView {
 
     private func scheduleVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
         let now = CFAbsoluteTimeGetCurrent()
+        let interval = reloadIntervalSeconds()
         let elapsed = now - lastReloadAt
-        if elapsed >= reloadMinIntervalSeconds {
+        if elapsed >= interval {
             performVersionRefresh(coordinator: coordinator)
             return
         }
@@ -1285,7 +1288,10 @@ private final class HierarchyOutlineContainerView: NSView {
         }
         reloadScheduled = true
         let generation = reloadGeneration
-        let delay = reloadMinIntervalSeconds - elapsed
+        let delay = interval - elapsed
+        NativeDiagnostics.debug(
+            "outline_refresh_scheduled delay=\(String(format: "%.3f", max(0, delay))) version=\(version) backlog=\(store?.pendingPatchBacklog ?? 0)"
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self, weak coordinator] in
             guard let self else {
                 return
@@ -1299,12 +1305,29 @@ private final class HierarchyOutlineContainerView: NSView {
         }
     }
 
+    private func reloadIntervalSeconds() -> CFAbsoluteTime {
+        guard let store else {
+            return minReloadIntervalIdleSeconds
+        }
+        if store.scanState == .running {
+            if store.pendingPatchBacklog >= 24_000 {
+                return maxReloadIntervalScanningSeconds
+            }
+            if store.pendingPatchBacklog >= 8_000 {
+                return 2.0
+            }
+            return minReloadIntervalScanningSeconds
+        }
+        return minReloadIntervalIdleSeconds
+    }
+
     private func performVersionRefresh(coordinator: HierarchyOutlineView.Coordinator) {
         guard configured, store?.node(rootId) != nil else {
             return
         }
 
         let refreshStartedAt = CFAbsoluteTimeGetCurrent()
+        lastReloadAt = refreshStartedAt
         let didFullReload = outlineView.numberOfRows <= fullReloadRowLimit
         if didFullReload {
             outlineView.reloadData()
@@ -1313,14 +1336,13 @@ private final class HierarchyOutlineContainerView: NSView {
             refreshVisibleRows()
         }
         fitSizeColumnToContent(coordinator: coordinator)
-        lastReloadAt = CFAbsoluteTimeGetCurrent()
 
         if didFullReload || !isSelectionSynchronized(coordinator: coordinator) {
             syncSelection(coordinator: coordinator)
         }
 
         let refreshMode = didFullReload ? "full" : "visible"
-        let details = "mode=\(refreshMode) rows=\(outlineView.numberOfRows) selected=\(selectedId)"
+        let details = "mode=\(refreshMode) rows=\(outlineView.numberOfRows) selected=\(selectedId) version=\(version)"
         NativeDiagnostics.slowPath(
             "outline_refresh",
             startedAt: refreshStartedAt,
