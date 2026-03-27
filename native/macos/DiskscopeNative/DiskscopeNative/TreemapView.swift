@@ -342,18 +342,18 @@ final class TreemapCanvas: NSView {
     private func launchLayoutJob() {
         let startedAt = CFAbsoluteTimeGetCurrent()
         guard bounds.width > 4, bounds.height > 4 else {
-            clearLayout()
+            clearLayoutOrPreserveLast(reason: "bounds_too_small")
             return
         }
         guard let store else {
-            clearLayout()
+            clearLayoutOrPreserveLast(reason: "store_unavailable")
             return
         }
 
         let inset = bounds.insetBy(dx: 2, dy: 2)
         let exploredBounds = exploredRect(in: inset, fraction: exploredFraction)
         guard exploredBounds.width > 2, exploredBounds.height > 2 else {
-            clearLayout(exploredBounds: exploredBounds)
+            clearLayoutOrPreserveLast(exploredBounds: exploredBounds, reason: "explored_bounds_too_small")
             return
         }
 
@@ -362,7 +362,7 @@ final class TreemapCanvas: NSView {
             rootId: rootId,
             exploredBounds: exploredBounds
         ) else {
-            clearLayout(exploredBounds: exploredBounds)
+            clearLayoutOrPreserveLast(exploredBounds: exploredBounds, reason: "snapshot_unavailable")
             return
         }
 
@@ -697,12 +697,37 @@ final class TreemapCanvas: NSView {
             return false
         }
 
-        // While scan patches are still streaming, keep the previous committed layout instead of
-        // replacing it with an empty final frame from an intermediate snapshot.
-        guard let store, store.scanState == .running else {
+        // Do not preserve stale rectangles when the current root is genuinely empty
+        // (e.g. zooming into a file, reset model before first patches).
+        guard let store,
+              let currentRoot = store.nodes[frame.rootId],
+              !currentRoot.children.isEmpty else {
             return false
         }
         return frame.modelVersion >= lastCommittedModelVersion
+    }
+
+    private func clearLayoutOrPreserveLast(
+        exploredBounds: CGRect = .zero,
+        reason: String
+    ) {
+        if let store,
+           rootId == lastCommittedRootId,
+           !rects.isEmpty,
+           let root = store.nodes[rootId],
+           !root.children.isEmpty {
+            self.exploredBounds = exploredBounds
+            layoutInFlight = false
+            NativeDiagnostics.debug(
+                "treemap_layout_preserve reason=\(reason) version=\(modelVersion) root=\(rootId) rects=\(rects.count)"
+            )
+            needsDisplay = true
+            return
+        }
+        NativeDiagnostics.debug(
+            "treemap_layout_clear reason=\(reason) version=\(modelVersion) root=\(rootId)"
+        )
+        clearLayout(exploredBounds: exploredBounds)
     }
 
     private func clearLayout(exploredBounds: CGRect = .zero) {
