@@ -28,6 +28,7 @@ enum NativeProgressHue: CaseIterable {
     case scanned
     case deferred
     case remaining
+    case unresolved
 
     var degrees: CGFloat {
         switch self {
@@ -37,6 +38,8 @@ enum NativeProgressHue: CaseIterable {
             return 28
         case .remaining:
             return 52
+        case .unresolved:
+            return 2
         }
     }
 }
@@ -572,6 +575,13 @@ final class NativeScanStore: ObservableObject {
         return source.isEmpty ? "/" : source
     }
 
+    private var isActivePathVolumeRoot: Bool {
+        let normalizedActivePath = NativeScanStore.normalizedPath(activePath)
+        return availableDrives.contains { drive in
+            NativeScanStore.normalizedPath(drive.path) == normalizedActivePath
+        }
+    }
+
     var selectedDriveInfo: NativeDriveInfo? {
         availableDrives.first(where: { $0.path == selectedDrive })
     }
@@ -671,6 +681,20 @@ final class NativeScanStore: ObservableObject {
 
     var remainingSegmentGbLabel: String {
         NativeScanStore.humanGigabytes(capacitySegments.remainingBytes)
+    }
+
+    var hasUnresolvedRemainingAfterCompletion: Bool {
+        scanState == .completed
+            && isActivePathVolumeRoot
+            && capacitySegments.remainingBytes > 0
+    }
+
+    var remainingSegmentTitle: String {
+        hasUnresolvedRemainingAfterCompletion ? "Unresolved" : "Pending"
+    }
+
+    var remainingSegmentAccessibilityLabel: String {
+        hasUnresolvedRemainingAfterCompletion ? "unresolved" : "pending"
     }
 
     var emptySegmentGbLabel: String {
@@ -1400,12 +1424,29 @@ final class NativeScanStore: ObservableObject {
         switch terminal {
         case .completed:
             scanState = .completed
-            if errorNodeCount > 0 {
+            let segments = capacitySegments
+            let unresolvedBytes = isActivePathVolumeRoot ? segments.remainingBytes : 0
+            if unresolvedBytes > 0 {
+                if errorNodeCount > 0 {
+                    statusLine =
+                        "Completed with \(NativeScanStore.humanBytes(unresolvedBytes)) unresolved across \(errorNodeCount) scan errors"
+                } else {
+                    statusLine =
+                        "Completed with \(NativeScanStore.humanBytes(unresolvedBytes)) unresolved"
+                }
+            } else if errorNodeCount > 0 {
                 statusLine = "Completed with \(errorNodeCount) scan errors"
             } else {
                 statusLine = "Completed: \(scannedBytesLabel) scanned"
             }
-            NativeDiagnostics.info("scan_terminal completed scanned=\(progress.bytesSeen) target=\(progress.targetBytes)")
+            NativeDiagnostics.info(
+                "scan_terminal completed scanned=\(segments.scannedBytes) deferred=\(segments.deferredBytes) remaining=\(segments.remainingBytes) unresolved=\(unresolvedBytes) target=\(progress.targetBytes) occupied=\(segments.occupiedBytes) total=\(segments.totalBytes) errors=\(errorNodeCount)"
+            )
+            if unresolvedBytes > 0 {
+                NativeDiagnostics.warning(
+                    "scan_terminal unresolved_remaining bytes=\(unresolvedBytes) errors=\(errorNodeCount)"
+                )
+            }
         case .cancelled:
             scanState = .cancelled
             statusLine = "Cancelled"
@@ -1918,6 +1959,10 @@ final class NativeScanStore: ObservableObject {
 
     private static func saturatingSubtract(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
         lhs >= rhs ? lhs - rhs : 0
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     private func parsedPositiveInt(_ text: String) -> Int? {

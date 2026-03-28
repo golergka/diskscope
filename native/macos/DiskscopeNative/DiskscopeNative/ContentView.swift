@@ -294,6 +294,7 @@ struct ContentView: View {
     private var progressBar: some View {
         let segments = store.capacitySegments
         let darkMode = colorScheme == .dark
+        let remainingAsError = store.hasUnresolvedRemainingAfterCompletion
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -302,7 +303,9 @@ struct ContentView: View {
 
                 ScanCapacityBarView(
                     segments: segments,
-                    isRunning: store.scanState == .running
+                    isRunning: store.scanState == .running,
+                    highlightRemainingAsError: remainingAsError,
+                    remainingAccessibilityLabel: store.remainingSegmentAccessibilityLabel
                 )
                     .frame(maxWidth: .infinity)
                     .frame(height: 22)
@@ -327,9 +330,11 @@ struct ContentView: View {
                     color: ScanCapacityPalette.deferred(darkMode: darkMode)
                 )
                 ScanCapacityLegendItem(
-                    title: "Pending",
+                    title: store.remainingSegmentTitle,
                     value: store.remainingSegmentGbLabel,
-                    color: ScanCapacityPalette.remaining(darkMode: darkMode)
+                    color: remainingAsError
+                        ? ScanCapacityPalette.unresolved(darkMode: darkMode)
+                        : ScanCapacityPalette.remaining(darkMode: darkMode)
                 )
                 ScanCapacityLegendItem(
                     title: "Empty",
@@ -668,6 +673,10 @@ private enum ScanCapacityPalette {
         Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
     }
 
+    static func unresolved(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.unresolved, darkMode: darkMode))
+    }
+
     static func empty(darkMode: Bool) -> Color {
         Color(nsColor: emptyBase(darkMode: darkMode))
     }
@@ -686,6 +695,10 @@ private enum ScanCapacityPalette {
 
     static func remainingGradient(darkMode: Bool) -> LinearGradient {
         gradient(base: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
+    }
+
+    static func unresolvedGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.unresolved, darkMode: darkMode))
     }
 
     static func emptyGradient(darkMode: Bool) -> LinearGradient {
@@ -777,6 +790,8 @@ private struct ScanCapacityBarView: View {
     @Environment(\.colorScheme) private var colorScheme
     let segments: NativeCapacitySegments
     let isRunning: Bool
+    let highlightRemainingAsError: Bool
+    let remainingAccessibilityLabel: String
 
     var body: some View {
         GeometryReader { geometry in
@@ -804,7 +819,11 @@ private struct ScanCapacityBarView: View {
                         .fill(ScanCapacityPalette.deferredGradient(darkMode: darkMode))
                         .frame(width: deferredWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.remainingGradient(darkMode: darkMode))
+                        .fill(
+                            highlightRemainingAsError
+                                ? ScanCapacityPalette.unresolvedGradient(darkMode: darkMode)
+                                : ScanCapacityPalette.remainingGradient(darkMode: darkMode)
+                        )
                         .frame(width: remainingWidth)
                     Rectangle()
                         .fill(ScanCapacityPalette.emptyGradient(darkMode: darkMode))
@@ -857,7 +876,7 @@ private struct ScanCapacityBarView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Disk scan capacity")
         .accessibilityValue(
-            "Scanned \(segments.scannedBytes) bytes, deferred \(segments.deferredBytes) bytes, pending \(segments.remainingBytes) bytes, empty \(segments.emptyBytes) bytes"
+            "Scanned \(segments.scannedBytes) bytes, deferred \(segments.deferredBytes) bytes, \(remainingAccessibilityLabel) \(segments.remainingBytes) bytes, empty \(segments.emptyBytes) bytes"
         )
     }
 }
