@@ -214,11 +214,14 @@ struct ContentView: View {
             resultsActions
             progressBar
 
-            HSplitView {
-                hierarchyPane
-                    .frame(minWidth: 320, idealWidth: 380, maxWidth: 480)
-                treemapPane
-            }
+            InvisibleDividerResultsSplitView(
+                leading: hierarchyPane,
+                trailing: treemapPane,
+                leadingMinWidth: 320,
+                leadingIdealWidth: 380,
+                leadingMaxWidth: 480,
+                dividerHitWidth: 24
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -345,11 +348,9 @@ struct ContentView: View {
 
     private var hierarchyPane: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Hierarchy")
-                    .font(.headline)
-                Spacer()
-                if store.zoomNodeId != store.rootNodeId {
+            if store.zoomNodeId != store.rootNodeId {
+                HStack {
+                    Spacer()
                     HStack(spacing: 6) {
                         Button {
                             store.zoomToParent()
@@ -403,18 +404,12 @@ struct ContentView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var treemapPane: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Treemap")
-                    .font(.headline)
                 Spacer()
                 Button("Reset Zoom") {
                     store.resetZoom()
@@ -439,12 +434,7 @@ struct ContentView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func handleNodeContextAction(nodeId: UInt64, action: NativeNodeContextAction) {
@@ -483,6 +473,208 @@ struct ContentView: View {
             store.moveNodeToTrash(nodeId: nodeId)
         }
     }
+}
+
+private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: NSViewRepresentable {
+    let leading: Leading
+    let trailing: Trailing
+    let leadingMinWidth: CGFloat
+    let leadingIdealWidth: CGFloat
+    let leadingMaxWidth: CGFloat
+    let dividerHitWidth: CGFloat
+
+    private let trailingMinWidth: CGFloat = 320
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> InvisibleDividerResultsSplitContainer {
+        let view = InvisibleDividerResultsSplitContainer()
+        view.splitView.delegate = context.coordinator
+        context.coordinator.configure(
+            leadingMinWidth: leadingMinWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth
+        )
+        view.updateContent(leading: AnyView(leading), trailing: AnyView(trailing))
+        view.updateSizing(
+            leadingMinWidth: leadingMinWidth,
+            leadingIdealWidth: leadingIdealWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            dividerHitWidth: dividerHitWidth
+        )
+        return view
+    }
+
+    func updateNSView(_ nsView: InvisibleDividerResultsSplitContainer, context: Context) {
+        nsView.splitView.delegate = context.coordinator
+        context.coordinator.configure(
+            leadingMinWidth: leadingMinWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth
+        )
+        nsView.updateContent(leading: AnyView(leading), trailing: AnyView(trailing))
+        nsView.updateSizing(
+            leadingMinWidth: leadingMinWidth,
+            leadingIdealWidth: leadingIdealWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            dividerHitWidth: dividerHitWidth
+        )
+    }
+
+    final class Coordinator: NSObject, NSSplitViewDelegate {
+        private var leadingMinWidth: CGFloat = 320
+        private var leadingMaxWidth: CGFloat = 480
+        private var trailingMinWidth: CGFloat = 320
+
+        func configure(leadingMinWidth: CGFloat, leadingMaxWidth: CGFloat, trailingMinWidth: CGFloat) {
+            self.leadingMinWidth = leadingMinWidth
+            self.leadingMaxWidth = leadingMaxWidth
+            self.trailingMinWidth = trailingMinWidth
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            constrainMinCoordinate proposedMinimumPosition: CGFloat,
+            ofSubviewAt dividerIndex: Int
+        ) -> CGFloat {
+            max(proposedMinimumPosition, leadingMinWidth)
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+            ofSubviewAt dividerIndex: Int
+        ) -> CGFloat {
+            let maxByTrailing = splitView.bounds.width - splitView.dividerThickness - trailingMinWidth
+            let hardMax = min(leadingMaxWidth, maxByTrailing)
+            if hardMax <= leadingMinWidth {
+                return leadingMinWidth
+            }
+            return min(proposedMaximumPosition, hardMax)
+        }
+
+        func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+            true
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            effectiveRect proposedEffectiveRect: NSRect,
+            forDrawnRect drawnRect: NSRect,
+            ofDividerAt dividerIndex: Int
+        ) -> NSRect {
+            let requestedHitWidth = (splitView as? InvisibleDividerSplitView)?.dragHitWidth ?? splitView.dividerThickness
+            let hitWidth = max(requestedHitWidth, splitView.dividerThickness)
+            if splitView.isVertical {
+                return NSRect(
+                    x: drawnRect.midX - hitWidth * 0.5,
+                    y: splitView.bounds.minY,
+                    width: hitWidth,
+                    height: splitView.bounds.height
+                )
+            }
+            return NSRect(
+                x: splitView.bounds.minX,
+                y: drawnRect.midY - hitWidth * 0.5,
+                width: splitView.bounds.width,
+                height: hitWidth
+            )
+        }
+    }
+}
+
+private final class InvisibleDividerResultsSplitContainer: NSView {
+    let splitView = InvisibleDividerSplitView()
+    private let leadingHost = NSHostingView(rootView: AnyView(EmptyView()))
+    private let trailingHost = NSHostingView(rootView: AnyView(EmptyView()))
+
+    private var leadingMinWidth: CGFloat = 320
+    private var leadingIdealWidth: CGFloat = 380
+    private var leadingMaxWidth: CGFloat = 480
+    private var didApplyInitialSplitPosition = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    func updateContent(leading: AnyView, trailing: AnyView) {
+        leadingHost.rootView = leading
+        trailingHost.rootView = trailing
+    }
+
+    func updateSizing(
+        leadingMinWidth: CGFloat,
+        leadingIdealWidth: CGFloat,
+        leadingMaxWidth: CGFloat,
+        dividerHitWidth: CGFloat
+    ) {
+        self.leadingMinWidth = leadingMinWidth
+        self.leadingIdealWidth = leadingIdealWidth
+        self.leadingMaxWidth = leadingMaxWidth
+        splitView.dragHitWidth = dividerHitWidth
+        applyInitialSplitPositionIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        applyInitialSplitPositionIfNeeded()
+    }
+
+    private func setup() {
+        splitView.translatesAutoresizingMaskIntoConstraints = false
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.adjustSubviews()
+        addSubview(splitView)
+
+        splitView.addArrangedSubview(leadingHost)
+        splitView.addArrangedSubview(trailingHost)
+
+        NSLayoutConstraint.activate([
+            splitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            splitView.topAnchor.constraint(equalTo: topAnchor),
+            splitView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    private func applyInitialSplitPositionIfNeeded() {
+        guard !didApplyInitialSplitPosition, splitView.bounds.width > 0 else {
+            return
+        }
+        let availableWidth = splitView.bounds.width - splitView.dividerThickness
+        guard availableWidth > 0 else {
+            return
+        }
+        let clamped = min(max(leadingIdealWidth, leadingMinWidth), min(leadingMaxWidth, availableWidth))
+        splitView.setPosition(clamped, ofDividerAt: 0)
+        didApplyInitialSplitPosition = true
+    }
+}
+
+private final class InvisibleDividerSplitView: NSSplitView {
+    var dragHitWidth: CGFloat = 24
+
+    override var dividerThickness: CGFloat {
+        1
+    }
+
+    override var dividerColor: NSColor {
+        .clear
+    }
+
+    override func drawDivider(in dividerRect: NSRect) {
+        // Keep divider invisible while preserving resize behavior.
+    }
+
 }
 
 private enum ScanCapacityPalette {
@@ -590,7 +782,6 @@ private struct ScanCapacityBarView: View {
         )
     }
 }
-
 private struct SetupAdvancedSheetView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.dismiss) private var dismiss
@@ -1368,11 +1559,12 @@ private final class HierarchyOutlineContainerView: NSView {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
-        scrollView.backgroundColor = .controlBackgroundColor
-        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .clear
+        scrollView.drawsBackground = false
 
         outlineView.headerView = NSTableHeaderView()
         outlineView.style = .sourceList
+        outlineView.backgroundColor = .clear
         outlineView.rowSizeStyle = .default
         outlineView.floatsGroupRows = false
         outlineView.focusRingType = .default
