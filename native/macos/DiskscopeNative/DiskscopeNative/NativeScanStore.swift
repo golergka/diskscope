@@ -174,7 +174,9 @@ enum NativeNodeContextAction: Int {
     case showInFinder = 1
     case revealParentInFinder = 2
     case copyPath = 3
-    case deleteToTrash = 4
+    case expandDeferred = 4
+    case retryScan = 5
+    case deleteToTrash = 6
 }
 
 struct NativeUpgradePrompt: Identifiable, Equatable {
@@ -752,29 +754,29 @@ final class NativeScanStore: ObservableObject {
         startScan()
     }
 
-    func expandDeferredSubtree(nodeId: UInt64) {
+    func enqueueDeferredExpansion(nodeId: UInt64) {
         guard let node = nodes[nodeId],
               node.childrenState == .collapsedByThreshold else {
             NSSound.beep()
             return
         }
-
-        let subtreePath = path(for: nodeId)
-        let priorThreshold = thresholdOverrideText
-        let usesAutoThreshold = parsedPositiveUInt64(priorThreshold) == nil
-        if usesAutoThreshold {
-            // Use the smallest positive threshold to force full detail for the expanded subtree.
-            thresholdOverrideText = "1"
+        guard let handle = session else {
+            NSSound.beep()
+            statusLine = "Cannot expand deferred subtree: no active scan session"
+            return
         }
 
-        customPath = subtreePath
-        useCustomPath = true
-        statusLine = "Expanding deferred subtree: \(subtreePath)"
-        startScan()
-
-        if usesAutoThreshold {
-            thresholdOverrideText = priorThreshold
+        let queued = ds_scan_enqueue_expand_ref(handle, nodeId) != 0
+        guard queued else {
+            NSSound.beep()
+            statusLine = "Failed to queue deferred expansion for \(path(for: nodeId))"
+            return
         }
+
+        expandedNodes.insert(nodeId)
+        scanState = .running
+        statusLine = "Queued deferred expansion: \(path(for: nodeId))"
+        updateDockTileProgress()
     }
 
     func retryNode(nodeId: UInt64) {
@@ -1280,6 +1282,9 @@ final class NativeScanStore: ObservableObject {
         }
 
         updateDockTileProgress()
+        if case .completed = terminal {
+            return
+        }
         teardownSession(cancel: false, synchronous: false)
     }
 
