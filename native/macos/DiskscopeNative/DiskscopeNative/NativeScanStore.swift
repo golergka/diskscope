@@ -415,7 +415,10 @@ final class NativeScanStore: ObservableObject {
     @Published var proMonitorEnabled: Bool = false
     private var childOrderRevisions: [UInt64: UInt64] = [:]
     private var errorNodeIds: Set<UInt64> = []
+    private var errorDisplayHoldNodeIds: Set<UInt64> = []
     private var optimisticExpandingNodeIds: Set<UInt64> = []
+    private var stickyKnownErrorCountWhileRunning: Int = 0
+    private var preserveKnownErrorsOnNextScanStart = false
     private let distribution: NativeDistribution
     private let appStoreUrl: URL
     private let proProductId: String?
@@ -549,7 +552,13 @@ final class NativeScanStore: ObservableObject {
     }
 
     var totalErrorCount: Int {
-        errorNodeCount + runtimeErrors.count
+        let effectiveNodeErrors: Int
+        if scanState == .running {
+            effectiveNodeErrors = max(errorNodeCount, stickyKnownErrorCountWhileRunning)
+        } else {
+            effectiveNodeErrors = errorNodeCount
+        }
+        return effectiveNodeErrors + runtimeErrors.count
     }
 
     var scannedBytesLabel: String {
@@ -698,6 +707,13 @@ final class NativeScanStore: ObservableObject {
             return
         }
 
+        if preserveKnownErrorsOnNextScanStart {
+            stickyKnownErrorCountWhileRunning = max(stickyKnownErrorCountWhileRunning, errorNodeCount)
+            preserveKnownErrorsOnNextScanStart = false
+        } else {
+            stickyKnownErrorCountWhileRunning = 0
+        }
+
         teardownSession(cancel: true, synchronous: true)
 
         let path = activePath
@@ -776,30 +792,40 @@ final class NativeScanStore: ObservableObject {
             pendingTerminalEvent = nil
         }
 
-        let queued = ds_scan_enqueue_expand_ref(handle, nodeId) != 0
-        guard queued else {
-            NSSound.beep()
-            statusLine = "Failed to queue deferred expansion for \(path(for: nodeId))"
-            return
-        }
-
+        let previousScanState = scanState
+        let previousStickyKnownErrorCount = stickyKnownErrorCountWhileRunning
         if optimisticExpandingNodeIds.insert(nodeId).inserted {
             modelVersion &+= 1
         }
-
+        stickyKnownErrorCountWhileRunning = max(stickyKnownErrorCountWhileRunning, errorNodeCount)
         expandedNodes.insert(nodeId)
         scanState = .running
         statusLine = "Queued deferred expansion: \(path(for: nodeId))"
         updateDockTileProgress()
+
+        let queued = ds_scan_enqueue_expand_ref(handle, nodeId) != 0
+        guard queued else {
+            if optimisticExpandingNodeIds.remove(nodeId) != nil {
+                modelVersion &+= 1
+            }
+            stickyKnownErrorCountWhileRunning = previousStickyKnownErrorCount
+            scanState = previousScanState
+            NSSound.beep()
+            statusLine = "Failed to queue deferred expansion for \(path(for: nodeId))"
+            updateDockTileProgress()
+            return
+        }
     }
 
     func retryNode(nodeId: UInt64) {
-        guard let node = nodes[nodeId], node.errorFlag else {
+        guard let node = nodes[nodeId], isNodeErroredForDisplay(node) else {
             NSSound.beep()
             return
         }
 
         statusLine = "Retrying scan for \(path(for: nodeId))..."
+        stickyKnownErrorCountWhileRunning = max(stickyKnownErrorCountWhileRunning, errorNodeCount)
+        preserveKnownErrorsOnNextScanStart = true
         startScan()
     }
 
@@ -930,7 +956,7 @@ final class NativeScanStore: ObservableObject {
     }
 
     func nodeBadge(_ node: NativeNode) -> String {
-        if node.errorFlag {
+        if isNodeErroredForDisplay(node) {
             return "Error"
         }
         if isNodeDeferredForDisplay(node) {
@@ -951,11 +977,15 @@ final class NativeScanStore: ObservableObject {
         node.childrenState == .collapsedByThreshold && !isOptimisticallyExpanding(nodeId: node.id)
     }
 
+    func isNodeErroredForDisplay(_ node: NativeNode) -> Bool {
+        node.errorFlag || errorDisplayHoldNodeIds.contains(node.id)
+    }
+
     func isNodeInProgress(_ node: NativeNode) -> Bool {
         guard node.kind != .file else {
             return false
         }
-        if node.errorFlag {
+        if isNodeErroredForDisplay(node) {
             return false
         }
         if isOptimisticallyExpanding(nodeId: node.id) {
@@ -977,6 +1007,9 @@ final class NativeScanStore: ObservableObject {
     }
 
     func nodeSizeLabel(_ node: NativeNode) -> String {
+        if isOptimisticallyExpanding(nodeId: node.id), node.sizeState == .final {
+            return NativeScanStore.humanBytes(node.sizeBytes)
+        }
         if isNodeInProgress(node) {
             return ""
         }
@@ -1315,10 +1348,12 @@ final class NativeScanStore: ObservableObject {
 
         switch terminal {
         case .completed:
+            reconcileErrorDisplayHoldsAfterDrain()
             let hadOptimistic = clearReconciledOptimisticExpansions()
             if hadOptimistic {
                 modelVersion &+= 1
             }
+            stickyKnownErrorCountWhileRunning = 0
             scanState = .completed
             if errorNodeCount > 0 {
                 statusLine = "Completed with \(errorNodeCount) scan errors"
@@ -1331,6 +1366,7 @@ final class NativeScanStore: ObservableObject {
             if hadOptimistic {
                 modelVersion &+= 1
             }
+            stickyKnownErrorCountWhileRunning = 0
             scanState = .cancelled
             statusLine = "Cancelled"
             NativeDiagnostics.info("scan_terminal cancelled")
@@ -1339,6 +1375,7 @@ final class NativeScanStore: ObservableObject {
             if hadOptimistic {
                 modelVersion &+= 1
             }
+            stickyKnownErrorCountWhileRunning = 0
             scanState = .failed(message)
             statusLine = message
             NativeDiagnostics.warning("scan_terminal error=\(message)")
@@ -1387,6 +1424,12 @@ final class NativeScanStore: ObservableObject {
         if isOptimisticallyExpanding(nodeId: patch.id),
            patch.errorFlag || patch.childrenState != .collapsedByThreshold {
             optimisticExpandingNodeIds.remove(patch.id)
+        }
+
+        if patch.errorFlag {
+            errorDisplayHoldNodeIds.insert(patch.id)
+        } else if scanState != .running {
+            errorDisplayHoldNodeIds.remove(patch.id)
         }
 
         if previousErrorFlag != patch.errorFlag {
@@ -1452,6 +1495,7 @@ final class NativeScanStore: ObservableObject {
         pendingPatchCursor = 0
         patchFlushScheduled = false
         pendingTerminalEvent = nil
+        errorDisplayHoldNodeIds.removeAll(keepingCapacity: false)
         optimisticExpandingNodeIds.removeAll(keepingCapacity: false)
         progress = NativeProgress()
         pendingPatchBacklog = 0
@@ -1696,6 +1740,18 @@ final class NativeScanStore: ObservableObject {
         }
         optimisticExpandingNodeIds.removeAll(keepingCapacity: true)
         return true
+    }
+
+    private func reconcileErrorDisplayHoldsAfterDrain() {
+        guard !errorDisplayHoldNodeIds.isEmpty else {
+            return
+        }
+        errorDisplayHoldNodeIds = errorDisplayHoldNodeIds.filter { nodeId in
+            guard let node = nodes[nodeId] else {
+                return false
+            }
+            return node.errorFlag
+        }
     }
 
     @discardableResult

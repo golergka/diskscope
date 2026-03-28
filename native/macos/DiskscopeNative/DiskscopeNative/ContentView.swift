@@ -722,7 +722,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let retryItem = contextMenuItem(
                 title: "Retry",
                 action: .retryScan,
-                enabled: node.errorFlag
+                enabled: parent.store.isNodeErroredForDisplay(node)
             )
             let deleteItem = contextMenuItem(
                 title: "Delete…",
@@ -1032,7 +1032,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             inProgressIconView: NSImageView
         ) {
             let showsDeferred = parent.store.isNodeDeferredForDisplay(node)
-            let showsError = node.errorFlag
+            let showsError = parent.store.isNodeErroredForDisplay(node)
             let showsInProgress = parent.store.isNodeInProgress(node)
 
             // Single-slot status lane: show one centered icon for consistent alignment.
