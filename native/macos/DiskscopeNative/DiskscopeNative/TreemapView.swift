@@ -638,6 +638,9 @@ final class TreemapCanvas: NSView {
             guard self.isLayoutGenerationCurrent(frame.generation) else {
                 return
             }
+            if !frame.isFinal {
+                return
+            }
 
             // Progressive recompute can transiently emit empty snapshots while patches are still in flight.
             // Keep the last committed frame to avoid visual blank flashes.
