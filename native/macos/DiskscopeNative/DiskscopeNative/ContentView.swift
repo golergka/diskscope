@@ -1339,11 +1339,13 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let statusLane: NSView
             let deferredIconView: NSImageView
             let errorIconView: NSImageView
+            let inProgressIconView: NSImageView
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
                 label = reused.textField ?? NSTextField(labelWithString: "")
                 deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView(frame: .zero)
                 errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView(frame: .zero)
+                inProgressIconView = (reused.viewWithTag(1003) as? NSImageView) ?? NSImageView(frame: .zero)
                 statusLane = deferredIconView.superview ?? NSView(frame: .zero)
             } else {
                 cell = NSTableCellView(frame: .zero)
@@ -1373,10 +1375,21 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 errorIconView.contentTintColor = .systemRed
                 errorIconView.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
 
+                let inProgressIconView = NSImageView(frame: .zero)
+                inProgressIconView.translatesAutoresizingMaskIntoConstraints = false
+                inProgressIconView.tag = 1003
+                inProgressIconView.imageScaling = .scaleProportionallyDown
+                inProgressIconView.contentTintColor = .secondaryLabelColor
+                inProgressIconView.image = statusIcon(
+                    key: "status.in-progress",
+                    symbol: "arrow.triangle.2.circlepath"
+                )
+
                 label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
                 statusLane.addSubview(deferredIconView)
                 statusLane.addSubview(errorIconView)
+                statusLane.addSubview(inProgressIconView)
                 cell.addSubview(label)
                 cell.addSubview(statusLane)
                 cell.textField = label
@@ -1399,7 +1412,12 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                     errorIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
                     errorIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
                     errorIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
-                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth)
+                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+
+                    inProgressIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
+                    inProgressIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    inProgressIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    inProgressIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth)
                 ])
 
                 label.stringValue = parent.store.nodeSizeLabel(node)
@@ -1407,7 +1425,8 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                     node: node,
                     statusLane: statusLane,
                     deferredIconView: deferredIconView,
-                    errorIconView: errorIconView
+                    errorIconView: errorIconView,
+                    inProgressIconView: inProgressIconView
                 )
                 return cell
             }
@@ -1418,7 +1437,8 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 node: node,
                 statusLane: statusLane,
                 deferredIconView: deferredIconView,
-                errorIconView: errorIconView
+                errorIconView: errorIconView,
+                inProgressIconView: inProgressIconView
             )
             return cell
         }
@@ -1427,28 +1447,43 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             node: NativeNode,
             statusLane: NSView,
             deferredIconView: NSImageView,
-            errorIconView: NSImageView
+            errorIconView: NSImageView,
+            inProgressIconView: NSImageView
         ) {
             let showsDeferred = node.childrenState == .collapsedByThreshold
             let showsError = node.errorFlag
+            let showsInProgress = parent.store.isNodeInProgress(node)
 
             // Single-slot status lane: show one centered icon for consistent alignment.
             // Error takes precedence when both states are present.
             if showsError {
                 errorIconView.isHidden = false
                 deferredIconView.isHidden = true
+                inProgressIconView.isHidden = true
             } else if showsDeferred {
                 deferredIconView.isHidden = false
+                errorIconView.isHidden = true
+                inProgressIconView.isHidden = true
+            } else if showsInProgress {
+                inProgressIconView.isHidden = false
+                deferredIconView.isHidden = true
                 errorIconView.isHidden = true
             } else {
                 deferredIconView.isHidden = true
                 errorIconView.isHidden = true
+                inProgressIconView.isHidden = true
             }
 
-            let tooltip = statusTooltip(nodeId: node.id, showsDeferred: showsDeferred, showsError: showsError)
+            let tooltip = statusTooltip(
+                nodeId: node.id,
+                showsDeferred: showsDeferred,
+                showsError: showsError,
+                showsInProgress: showsInProgress
+            )
             statusLane.toolTip = tooltip
             deferredIconView.toolTip = tooltip
             errorIconView.toolTip = tooltip
+            inProgressIconView.toolTip = tooltip
         }
 
         private func deferredTooltip(nodeId: UInt64) -> String {
@@ -1468,17 +1503,34 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             """
         }
 
-        private func statusTooltip(nodeId: UInt64, showsDeferred: Bool, showsError: Bool) -> String? {
-            if showsDeferred && showsError {
-                return "\(deferredTooltip(nodeId: nodeId))\n\n\(errorTooltip(nodeId: nodeId))"
-            }
+        private func inProgressTooltip(nodeId: UInt64) -> String {
+            let nodePath = parent.store.path(for: nodeId)
+            return """
+            In progress: directory is queued or currently being scanned.
+            \(nodePath)
+            """
+        }
+
+        private func statusTooltip(
+            nodeId: UInt64,
+            showsDeferred: Bool,
+            showsError: Bool,
+            showsInProgress: Bool
+        ) -> String? {
+            var components: [String] = []
             if showsDeferred {
-                return deferredTooltip(nodeId: nodeId)
+                components.append(deferredTooltip(nodeId: nodeId))
             }
             if showsError {
-                return errorTooltip(nodeId: nodeId)
+                components.append(errorTooltip(nodeId: nodeId))
             }
-            return nil
+            if showsInProgress {
+                components.append(inProgressTooltip(nodeId: nodeId))
+            }
+            if components.isEmpty {
+                return nil
+            }
+            return components.joined(separator: "\n\n")
         }
 
         private func statusIcon(key: String, symbol: String) -> NSImage {
