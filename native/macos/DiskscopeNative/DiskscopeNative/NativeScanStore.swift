@@ -639,12 +639,23 @@ final class NativeScanStore: ObservableObject {
     }
 
     var exploredFraction: Double {
-        let denominator = occupiedProgressBytes
-        guard denominator > 0 else {
-            return progress.bytesSeen > 0 ? 1.0 : 0.0
+        let occupied = occupiedProgressBytes
+        let denominator: UInt64
+        if progress.totalBytes > 0 {
+            denominator = max(progress.totalBytes, occupied)
+        } else {
+            denominator = occupied
         }
-        let scanned = min(progress.bytesSeen, denominator)
-        return Double(scanned) / Double(denominator)
+        guard denominator > 0 else {
+            return 0.0
+        }
+
+        // Treemap fill should represent known occupied bytes out of total disk capacity.
+        // `bytesSeen` can lag collapsed/deferred subtree sizes, so also include root snapshot size.
+        let scannedFromProgress = min(progress.bytesSeen, occupied)
+        let scannedFromTree = min(nodes[rootNodeId]?.sizeBytes ?? 0, occupied)
+        let explored = max(scannedFromProgress, scannedFromTree)
+        return Double(min(explored, denominator)) / Double(denominator)
     }
 
     func showSetupScreen() {
