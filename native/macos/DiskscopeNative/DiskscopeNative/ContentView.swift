@@ -678,11 +678,86 @@ private final class InvisibleDividerSplitView: NSSplitView {
 }
 
 private enum ScanCapacityPalette {
-    static let scanned = Color(nsColor: .systemBlue)
-    static let deferred = Color(nsColor: .systemOrange)
-    static let remaining = Color(nsColor: .systemYellow)
-    static let empty = Color(nsColor: .tertiaryLabelColor).opacity(0.42)
-    static let track = Color(nsColor: .quaternaryLabelColor).opacity(0.24)
+    static let scanned = Color(nsColor: NSColor.systemBlue)
+    static let deferred = Color(nsColor: NSColor.systemOrange)
+    static let remaining = Color(nsColor: NSColor.systemYellow)
+    static let empty = Color(nsColor: NSColor.tertiaryLabelColor).opacity(0.5)
+
+    static var trackGradient: LinearGradient {
+        gradient(base: NSColor.controlBackgroundColor)
+    }
+
+    static var scannedGradient: LinearGradient {
+        gradient(base: NSColor.systemBlue)
+    }
+
+    static var deferredGradient: LinearGradient {
+        gradient(base: NSColor.systemOrange)
+    }
+
+    static var remainingGradient: LinearGradient {
+        gradient(base: NSColor.systemYellow)
+    }
+
+    static var emptyGradient: LinearGradient {
+        gradient(base: NSColor.tertiaryLabelColor.withAlphaComponent(0.45))
+    }
+
+    static var glossGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color.white.opacity(0.33), location: 0.0),
+                .init(color: Color.white.opacity(0.12), location: 0.33),
+                .init(color: Color.white.opacity(0.03), location: 0.58),
+                .init(color: Color.clear, location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var lowerShadeGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color.clear, location: 0.0),
+                .init(color: Color.black.opacity(0.08), location: 0.62),
+                .init(color: Color.black.opacity(0.2), location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var rimGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.55), Color.black.opacity(0.3)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var innerHighlightGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.28), Color.clear],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private static func gradient(base: NSColor) -> LinearGradient {
+        let top = base.blended(withFraction: 0.28, of: .white) ?? base
+        let mid = base
+        let bottom = base.blended(withFraction: 0.2, of: .black) ?? base
+        return LinearGradient(
+            stops: [
+                .init(color: Color(nsColor: top), location: 0.0),
+                .init(color: Color(nsColor: mid), location: 0.5),
+                .init(color: Color(nsColor: bottom), location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
 }
 
 private struct ScanCapacityLegendItem: View {
@@ -723,24 +798,24 @@ private struct ScanCapacityBarView: View {
             let usedWidth = widthForBytes(segments.occupiedBytes)
 
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(ScanCapacityPalette.track)
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.trackGradient)
 
                 HStack(spacing: 0) {
                     Rectangle()
-                        .fill(ScanCapacityPalette.scanned)
+                        .fill(ScanCapacityPalette.scannedGradient)
                         .frame(width: scannedWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.deferred)
+                        .fill(ScanCapacityPalette.deferredGradient)
                         .frame(width: deferredWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.remaining)
+                        .fill(ScanCapacityPalette.remainingGradient)
                         .frame(width: remainingWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.empty)
+                        .fill(ScanCapacityPalette.emptyGradient)
                         .frame(width: emptyWidth)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .clipShape(Capsule(style: .continuous))
 
                 if isRunning && usedWidth > 0 {
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -752,7 +827,7 @@ private struct ScanCapacityBarView: View {
                         LinearGradient(
                             colors: [
                                 Color.white.opacity(0),
-                                Color.white.opacity(0.35),
+                                Color.white.opacity(0.3),
                                 Color.white.opacity(0)
                             ],
                             startPoint: .leading,
@@ -771,9 +846,20 @@ private struct ScanCapacityBarView: View {
                     .allowsHitTesting(false)
                 }
 
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.glossGradient)
+
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.lowerShadeGradient)
+
+                Capsule(style: .continuous)
+                    .strokeBorder(ScanCapacityPalette.rimGradient, lineWidth: 1)
+
+                Capsule(style: .continuous)
+                    .inset(by: 1)
+                    .stroke(ScanCapacityPalette.innerHighlightGradient, lineWidth: 0.7)
             }
+            .shadow(color: Color.black.opacity(0.12), radius: 0.8, x: 0, y: 0.6)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Disk scan capacity")
