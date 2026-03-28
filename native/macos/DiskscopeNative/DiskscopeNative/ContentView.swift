@@ -213,6 +213,7 @@ struct ContentView: View {
         VStack(spacing: 10) {
             resultsActions
             progressBar
+            splitHeader
 
             InvisibleDividerResultsSplitView(
                 leading: hierarchyPane,
@@ -223,6 +224,22 @@ struct ContentView: View {
                 dividerHitWidth: 24
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var splitHeader: some View {
+        HStack(spacing: 10) {
+            Text(store.path(for: store.selectedNodeId))
+                .font(.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Button("Reset Zoom") {
+                store.resetZoom()
+            }
+            .disabled(store.zoomNodeId == store.rootNodeId)
         }
     }
 
@@ -347,44 +364,7 @@ struct ContentView: View {
     }
 
     private var hierarchyPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if store.zoomNodeId != store.rootNodeId {
-                HStack {
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Button {
-                            store.zoomToParent()
-                        } label: {
-                            Image(systemName: "arrow.up.to.line")
-                        }
-                        .help("Go up one level")
-
-                        Button {
-                            store.resetZoom()
-                        } label: {
-                            Image(systemName: "house")
-                        }
-                        .help("Return to scan root")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-
-            Text(store.path(for: store.selectedNodeId))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            if store.zoomNodeId != store.rootNodeId {
-                Text("Zoom root: \(store.path(for: store.zoomNodeId))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Divider()
-
+        VStack(alignment: .leading, spacing: 0) {
             HierarchyOutlineView(
                 store: store,
                 rootId: store.zoomNodeId,
@@ -408,15 +388,7 @@ struct ContentView: View {
     }
 
     private var treemapPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Spacer()
-                Button("Reset Zoom") {
-                    store.resetZoom()
-                }
-                .disabled(store.zoomNodeId == store.rootNodeId)
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             TreemapView(
                 store: store,
                 rootId: store.zoomNodeId,
