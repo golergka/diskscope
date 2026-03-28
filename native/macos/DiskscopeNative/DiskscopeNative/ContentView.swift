@@ -955,20 +955,15 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                     statusLane.widthAnchor.constraint(equalToConstant: hierarchyStatusLaneWidth),
                     statusLane.heightAnchor.constraint(greaterThanOrEqualToConstant: hierarchyStatusIconWidth),
 
-                    deferredIconView.leadingAnchor.constraint(equalTo: statusLane.leadingAnchor),
+                    deferredIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
                     deferredIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
                     deferredIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
                     deferredIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
 
-                    errorIconView.trailingAnchor.constraint(equalTo: statusLane.trailingAnchor),
+                    errorIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
                     errorIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
                     errorIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
-                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
-
-                    deferredIconView.trailingAnchor.constraint(
-                        equalTo: errorIconView.leadingAnchor,
-                        constant: -hierarchyStatusIconSpacing
-                    )
+                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth)
                 ])
 
                 label.stringValue = parent.store.nodeSizeLabel(node)
@@ -999,10 +994,20 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             errorIconView: NSImageView
         ) {
             let showsDeferred = node.childrenState == .collapsedByThreshold
-            deferredIconView.isHidden = !showsDeferred
-
             let showsError = node.errorFlag
-            errorIconView.isHidden = !showsError
+
+            // Single-slot status lane: show one centered icon for consistent alignment.
+            // Error takes precedence when both states are present.
+            if showsError {
+                errorIconView.isHidden = false
+                deferredIconView.isHidden = true
+            } else if showsDeferred {
+                deferredIconView.isHidden = false
+                errorIconView.isHidden = true
+            } else {
+                deferredIconView.isHidden = true
+                errorIconView.isHidden = true
+            }
 
             let tooltip = statusTooltip(nodeId: node.id, showsDeferred: showsDeferred, showsError: showsError)
             statusLane.toolTip = tooltip
@@ -1142,9 +1147,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
 
 private let hierarchySizeToStatusGap: CGFloat = 6
 private let hierarchyStatusIconWidth: CGFloat = 12
-private let hierarchyStatusIconSpacing: CGFloat = 4
-private let hierarchyStatusLaneWidth: CGFloat =
-    (hierarchyStatusIconWidth * 2) + hierarchyStatusIconSpacing
+private let hierarchyStatusLaneWidth: CGFloat = hierarchyStatusIconWidth + 2
 
 private final class HierarchyOutlineNativeView: NSOutlineView {
     var contextMenuProvider: ((Int) -> NSMenu?)?
