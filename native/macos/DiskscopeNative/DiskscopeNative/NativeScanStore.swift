@@ -488,6 +488,7 @@ final class NativeScanStore: ObservableObject {
     @Published var proMonitorEnabled: Bool = false
     private var childOrderRevisions: [UInt64: UInt64] = [:]
     private var errorNodeIds: Set<UInt64> = []
+    private var optimisticExpandingNodeIds: Set<UInt64> = []
     private let distribution: NativeDistribution
     private let appStoreUrl: URL
     private let proProductId: String?
@@ -919,6 +920,9 @@ final class NativeScanStore: ObservableObject {
             NSSound.beep()
             return
         }
+        if isOptimisticallyExpanding(nodeId: nodeId) {
+            return
+        }
         guard let handle = session else {
             NSSound.beep()
             statusLine = "Cannot expand deferred subtree: no active scan session"
@@ -932,17 +936,7 @@ final class NativeScanStore: ObservableObject {
             return
         }
 
-        if var queuedNode = nodes[nodeId] {
-            let wasDeferred = queuedNode.childrenState == .collapsedByThreshold
-            queuedNode.kind = .directory
-            queuedNode.sizeState = .partial
-            queuedNode.childrenState = .partial
-            queuedNode.children.removeAll(keepingCapacity: false)
-            nodes[nodeId] = queuedNode
-            if wasDeferred {
-                deferredNodeCount = max(0, deferredNodeCount - 1)
-            }
-            bumpChildOrderRevision(for: nodeId)
+        if optimisticExpandingNodeIds.insert(nodeId).inserted {
             modelVersion &+= 1
         }
 
@@ -1092,7 +1086,7 @@ final class NativeScanStore: ObservableObject {
         if node.errorFlag {
             return "Error"
         }
-        if node.childrenState == .collapsedByThreshold {
+        if isNodeDeferredForDisplay(node) {
             return "Deferred"
         }
         return ""
@@ -1102,11 +1096,25 @@ final class NativeScanStore: ObservableObject {
         node.name
     }
 
+    func isOptimisticallyExpanding(nodeId: UInt64) -> Bool {
+        optimisticExpandingNodeIds.contains(nodeId)
+    }
+
+    func isNodeDeferredForDisplay(_ node: NativeNode) -> Bool {
+        node.childrenState == .collapsedByThreshold && !isOptimisticallyExpanding(nodeId: node.id)
+    }
+
     func isNodeInProgress(_ node: NativeNode) -> Bool {
         guard node.kind != .file else {
             return false
         }
-        if node.errorFlag || node.childrenState == .collapsedByThreshold {
+        if node.errorFlag {
+            return false
+        }
+        if isOptimisticallyExpanding(nodeId: node.id) {
+            return true
+        }
+        if isNodeDeferredForDisplay(node) {
             return false
         }
 
@@ -1460,6 +1468,10 @@ final class NativeScanStore: ObservableObject {
 
         switch terminal {
         case .completed:
+            let hadOptimistic = clearOptimisticExpansions()
+            if hadOptimistic {
+                modelVersion &+= 1
+            }
             scanState = .completed
             let segments = capacitySegments
             let unresolvedBytes = isActivePathVolumeRoot ? segments.remainingBytes : 0
@@ -1485,10 +1497,18 @@ final class NativeScanStore: ObservableObject {
                 )
             }
         case .cancelled:
+            let hadOptimistic = clearOptimisticExpansions()
+            if hadOptimistic {
+                modelVersion &+= 1
+            }
             scanState = .cancelled
             statusLine = "Cancelled"
             NativeDiagnostics.info("scan_terminal cancelled")
         case .error(let message):
+            let hadOptimistic = clearOptimisticExpansions()
+            if hadOptimistic {
+                modelVersion &+= 1
+            }
             scanState = .failed(message)
             statusLine = message
             NativeDiagnostics.warning("scan_terminal error=\(message)")
@@ -1534,6 +1554,11 @@ final class NativeScanStore: ObservableObject {
         node.isHidden = patch.isHidden
         node.isSymlink = patch.isSymlink
         nodes[patch.id] = node
+
+        if isOptimisticallyExpanding(nodeId: patch.id),
+           patch.errorFlag || patch.childrenState != .collapsedByThreshold {
+            optimisticExpandingNodeIds.remove(patch.id)
+        }
 
         if previousErrorFlag != patch.errorFlag {
             if patch.errorFlag {
@@ -1611,6 +1636,7 @@ final class NativeScanStore: ObservableObject {
         pendingPatchCursor = 0
         patchFlushScheduled = false
         pendingTerminalEvent = nil
+        optimisticExpandingNodeIds.removeAll(keepingCapacity: false)
         progress = NativeProgress()
         pendingPatchBacklog = 0
         errorNodeCount = 0
@@ -1848,7 +1874,19 @@ final class NativeScanStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func clearOptimisticExpansions() -> Bool {
+        guard !optimisticExpandingNodeIds.isEmpty else {
+            return false
+        }
+        optimisticExpandingNodeIds.removeAll(keepingCapacity: true)
+        return true
+    }
+
     private func teardownSession(cancel: Bool, synchronous: Bool) {
+        if clearOptimisticExpansions() {
+            modelVersion &+= 1
+        }
         guard let handle = session else {
             return
         }
