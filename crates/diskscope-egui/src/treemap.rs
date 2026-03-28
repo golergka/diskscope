@@ -173,20 +173,14 @@ pub fn text_color_for_fill(fill: Color32, dark_mode: bool) -> Color32 {
     }
 }
 
-pub fn border_for_node(is_selected: bool, visuals: &Visuals) -> Stroke {
-    if is_selected {
-        Stroke::new(2.0, visuals.selection.stroke.color)
-    } else {
-        Stroke::new(
-            1.0,
-            visuals
-                .widgets
-                .noninteractive
-                .bg_stroke
-                .color
-                .gamma_multiply(if visuals.dark_mode { 1.0 } else { 0.75 }),
-        )
-    }
+pub fn selected_border_for_node(visuals: &Visuals) -> Stroke {
+    let color = visuals
+        .widgets
+        .noninteractive
+        .fg_stroke
+        .color
+        .gamma_multiply(if visuals.dark_mode { 0.92 } else { 0.85 });
+    Stroke::new(2.0, color)
 }
 
 fn file_extension_key(name: &str) -> String {

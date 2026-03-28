@@ -7,9 +7,16 @@
   --text-muted: #49614f;
   --accent: #1e6f4c;
   --accent-2: #bc4f24;
+  --treemap-selected-border: rgba(8, 28, 15, 0.45);
   --shadow: 0 18px 50px rgba(18, 52, 32, 0.16);
   --radius-lg: 18px;
   --radius-md: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --treemap-selected-border: rgba(248, 252, 249, 0.72);
+  }
 }
 
 * {
@@ -158,7 +165,6 @@ button:disabled {
 .treemap-cell {
   position: absolute;
   padding: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
   overflow: hidden;
   opacity: 0;
   transform: scale(0.96);
@@ -171,8 +177,8 @@ button:disabled {
   transform: scale(1);
 }
 
-.treemap-cell:hover {
-  outline: 2px solid rgba(8, 28, 15, 0.36);
+.treemap-cell.selected {
+  box-shadow: inset 0 0 0 2px var(--treemap-selected-border);
   z-index: 2;
 }
 
