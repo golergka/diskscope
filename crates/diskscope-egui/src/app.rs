@@ -884,11 +884,10 @@ impl DiskscopeApp {
                 let fill = treemap::color_for_node(node, item.depth, dark_mode);
                 let text_color = treemap::text_color_for_fill(fill, dark_mode);
                 painter.rect_filled(item.rect, 0.0, fill);
-                painter.rect_stroke(
-                    item.rect,
-                    0.0,
-                    treemap::border_for_node(is_selected, &visuals),
-                );
+                if is_selected {
+                    let stroke = treemap::selected_border_for_node(&visuals);
+                    painter.rect_stroke(item.rect.shrink(stroke.width * 0.5), 0.0, stroke);
+                }
 
                 if item.rect.width() > 80.0 && item.rect.height() > 18.0 {
                     painter.text(

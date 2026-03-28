@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingAdvancedSheet = false
     @State private var showingMonitoringSheet = false
 
@@ -213,13 +214,33 @@ struct ContentView: View {
         VStack(spacing: 10) {
             resultsActions
             progressBar
+            splitHeader
 
-            HSplitView {
-                hierarchyPane
-                    .frame(minWidth: 320, idealWidth: 380, maxWidth: 480)
-                treemapPane
-            }
+            InvisibleDividerResultsSplitView(
+                leading: hierarchyPane,
+                trailing: treemapPane,
+                leadingMinWidth: 320,
+                leadingIdealWidth: 380,
+                leadingMaxWidth: 480,
+                dividerHitWidth: 24
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var splitHeader: some View {
+        HStack(spacing: 10) {
+            Text(store.path(for: store.selectedNodeId))
+                .font(.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Button("Reset Zoom") {
+                store.resetZoom()
+            }
+            .disabled(store.zoomNodeId == store.rootNodeId)
         }
     }
 
@@ -271,28 +292,50 @@ struct ContentView: View {
     }
 
     private var progressBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
+        let segments = store.capacitySegments
+        let darkMode = colorScheme == .dark
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Text("State: \(store.scanState.label)")
                     .font(.headline)
 
-                ProgressView(value: store.progressFraction)
+                ScanCapacityBarView(
+                    segments: segments,
+                    isRunning: store.scanState == .running
+                )
                     .frame(maxWidth: .infinity)
+                    .frame(height: 22)
 
-                Text("\(store.scannedBytesLabel) / \(store.occupiedBytesLabel)")
+                Text(store.totalSegmentGbLabel)
                     .font(.system(.body, design: .rounded))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .help("Total capacity")
             }
 
             HStack(spacing: 14) {
-                Text("Scanned: \(store.scannedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Occupied: \(store.occupiedBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Capacity: \(store.totalBytesLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ScanCapacityLegendItem(
+                    title: "Scanned",
+                    value: store.scannedSegmentGbLabel,
+                    color: ScanCapacityPalette.scanned(darkMode: darkMode)
+                )
+                ScanCapacityLegendItem(
+                    title: "Deferred",
+                    value: store.deferredSegmentGbLabel,
+                    color: ScanCapacityPalette.deferred(darkMode: darkMode)
+                )
+                ScanCapacityLegendItem(
+                    title: "Pending",
+                    value: store.remainingSegmentGbLabel,
+                    color: ScanCapacityPalette.remaining(darkMode: darkMode)
+                )
+                ScanCapacityLegendItem(
+                    title: "Empty",
+                    value: store.emptySegmentGbLabel,
+                    color: ScanCapacityPalette.empty(darkMode: darkMode)
+                )
 
                 Button {
                     openWindow(id: "scan-errors")
@@ -305,65 +348,25 @@ struct ContentView: View {
                 .buttonStyle(.plain)
 
                 if store.deferredNodeCount > 0 {
-                    Text("Deferred: \(store.deferredNodeCount)")
+                    Text("Deferred nodes: \(store.deferredNodeCount)")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.orange)
                 }
 
                 Spacer()
+
+                Text(store.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-        }
-        .overlay(alignment: .leading) {
-            Text(store.statusLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 48)
         }
         .padding(.bottom, 16)
     }
 
     private var hierarchyPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Hierarchy")
-                    .font(.headline)
-                Spacer()
-                if store.zoomNodeId != store.rootNodeId {
-                    HStack(spacing: 6) {
-                        Button {
-                            store.zoomToParent()
-                        } label: {
-                            Image(systemName: "arrow.up.to.line")
-                        }
-                        .help("Go up one level")
-
-                        Button {
-                            store.resetZoom()
-                        } label: {
-                            Image(systemName: "house")
-                        }
-                        .help("Return to scan root")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-
-            Text(store.path(for: store.selectedNodeId))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            if store.zoomNodeId != store.rootNodeId {
-                Text("Zoom root: \(store.path(for: store.zoomNodeId))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Divider()
-
+        VStack(alignment: .leading, spacing: 0) {
             HierarchyOutlineView(
                 store: store,
                 rootId: store.zoomNodeId,
@@ -383,25 +386,11 @@ struct ContentView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var treemapPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Treemap")
-                    .font(.headline)
-                Spacer()
-                Button("Reset Zoom") {
-                    store.resetZoom()
-                }
-                .disabled(store.zoomNodeId == store.rootNodeId)
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             TreemapView(
                 store: store,
                 rootId: store.zoomNodeId,
@@ -419,12 +408,7 @@ struct ContentView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func handleNodeContextAction(nodeId: UInt64, action: NativeNodeContextAction) {
@@ -439,6 +423,10 @@ struct ContentView: View {
             store.revealNodeParentInFinder(nodeId: nodeId)
         case .copyPath:
             store.copyNodePath(nodeId: nodeId)
+        case .expandDeferred:
+            store.enqueueDeferredExpansion(nodeId: nodeId)
+        case .retryScan:
+            store.retryNode(nodeId: nodeId)
         case .deleteToTrash:
             confirmDelete(nodeId: nodeId)
         }
@@ -465,6 +453,414 @@ struct ContentView: View {
     }
 }
 
+private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: NSViewRepresentable {
+    let leading: Leading
+    let trailing: Trailing
+    let leadingMinWidth: CGFloat
+    let leadingIdealWidth: CGFloat
+    let leadingMaxWidth: CGFloat
+    let dividerHitWidth: CGFloat
+
+    private let trailingMinWidth: CGFloat = 320
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> InvisibleDividerResultsSplitContainer {
+        let view = InvisibleDividerResultsSplitContainer()
+        view.splitView.delegate = context.coordinator
+        context.coordinator.configure(
+            leadingMinWidth: leadingMinWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth
+        )
+        view.updateContent(leading: AnyView(leading), trailing: AnyView(trailing))
+        view.updateSizing(
+            leadingMinWidth: leadingMinWidth,
+            leadingIdealWidth: leadingIdealWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            dividerHitWidth: dividerHitWidth
+        )
+        return view
+    }
+
+    func updateNSView(_ nsView: InvisibleDividerResultsSplitContainer, context: Context) {
+        nsView.splitView.delegate = context.coordinator
+        context.coordinator.configure(
+            leadingMinWidth: leadingMinWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth
+        )
+        nsView.updateContent(leading: AnyView(leading), trailing: AnyView(trailing))
+        nsView.updateSizing(
+            leadingMinWidth: leadingMinWidth,
+            leadingIdealWidth: leadingIdealWidth,
+            leadingMaxWidth: leadingMaxWidth,
+            dividerHitWidth: dividerHitWidth
+        )
+    }
+
+    final class Coordinator: NSObject, NSSplitViewDelegate {
+        private var leadingMinWidth: CGFloat = 320
+        private var leadingMaxWidth: CGFloat = 480
+        private var trailingMinWidth: CGFloat = 320
+
+        func configure(leadingMinWidth: CGFloat, leadingMaxWidth: CGFloat, trailingMinWidth: CGFloat) {
+            self.leadingMinWidth = leadingMinWidth
+            self.leadingMaxWidth = leadingMaxWidth
+            self.trailingMinWidth = trailingMinWidth
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            constrainMinCoordinate proposedMinimumPosition: CGFloat,
+            ofSubviewAt dividerIndex: Int
+        ) -> CGFloat {
+            max(proposedMinimumPosition, leadingMinWidth)
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+            ofSubviewAt dividerIndex: Int
+        ) -> CGFloat {
+            let maxByTrailing = splitView.bounds.width - splitView.dividerThickness - trailingMinWidth
+            let hardMax = min(leadingMaxWidth, maxByTrailing)
+            if hardMax <= leadingMinWidth {
+                return leadingMinWidth
+            }
+            return min(proposedMaximumPosition, hardMax)
+        }
+
+        func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+            true
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            effectiveRect proposedEffectiveRect: NSRect,
+            forDrawnRect drawnRect: NSRect,
+            ofDividerAt dividerIndex: Int
+        ) -> NSRect {
+            let requestedHitWidth = (splitView as? InvisibleDividerSplitView)?.dragHitWidth ?? splitView.dividerThickness
+            let hitWidth = max(requestedHitWidth, splitView.dividerThickness)
+            if splitView.isVertical {
+                return NSRect(
+                    x: drawnRect.midX - hitWidth * 0.5,
+                    y: splitView.bounds.minY,
+                    width: hitWidth,
+                    height: splitView.bounds.height
+                )
+            }
+            return NSRect(
+                x: splitView.bounds.minX,
+                y: drawnRect.midY - hitWidth * 0.5,
+                width: splitView.bounds.width,
+                height: hitWidth
+            )
+        }
+    }
+}
+
+private final class InvisibleDividerResultsSplitContainer: NSView {
+    let splitView = InvisibleDividerSplitView()
+    private let leadingHost = NSHostingView(rootView: AnyView(EmptyView()))
+    private let trailingHost = NSHostingView(rootView: AnyView(EmptyView()))
+
+    private var leadingMinWidth: CGFloat = 320
+    private var leadingIdealWidth: CGFloat = 380
+    private var leadingMaxWidth: CGFloat = 480
+    private var didApplyInitialSplitPosition = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    func updateContent(leading: AnyView, trailing: AnyView) {
+        leadingHost.rootView = leading
+        trailingHost.rootView = trailing
+    }
+
+    func updateSizing(
+        leadingMinWidth: CGFloat,
+        leadingIdealWidth: CGFloat,
+        leadingMaxWidth: CGFloat,
+        dividerHitWidth: CGFloat
+    ) {
+        self.leadingMinWidth = leadingMinWidth
+        self.leadingIdealWidth = leadingIdealWidth
+        self.leadingMaxWidth = leadingMaxWidth
+        splitView.dragHitWidth = dividerHitWidth
+        applyInitialSplitPositionIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        applyInitialSplitPositionIfNeeded()
+    }
+
+    private func setup() {
+        splitView.translatesAutoresizingMaskIntoConstraints = false
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.adjustSubviews()
+        addSubview(splitView)
+
+        splitView.addArrangedSubview(leadingHost)
+        splitView.addArrangedSubview(trailingHost)
+
+        NSLayoutConstraint.activate([
+            splitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            splitView.topAnchor.constraint(equalTo: topAnchor),
+            splitView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    private func applyInitialSplitPositionIfNeeded() {
+        guard !didApplyInitialSplitPosition, splitView.bounds.width > 0 else {
+            return
+        }
+        let availableWidth = splitView.bounds.width - splitView.dividerThickness
+        guard availableWidth > 0 else {
+            return
+        }
+        let clamped = min(max(leadingIdealWidth, leadingMinWidth), min(leadingMaxWidth, availableWidth))
+        splitView.setPosition(clamped, ofDividerAt: 0)
+        didApplyInitialSplitPosition = true
+    }
+}
+
+private final class InvisibleDividerSplitView: NSSplitView {
+    var dragHitWidth: CGFloat = 24
+
+    override var dividerThickness: CGFloat {
+        1
+    }
+
+    override var dividerColor: NSColor {
+        .clear
+    }
+
+    override func drawDivider(in dividerRect: NSRect) {
+        // Keep divider invisible while preserving resize behavior.
+    }
+
+}
+
+private enum ScanCapacityPalette {
+    static func scanned(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.scanned, darkMode: darkMode))
+    }
+
+    static func deferred(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.deferred, darkMode: darkMode))
+    }
+
+    static func remaining(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
+    }
+
+    static func empty(darkMode: Bool) -> Color {
+        Color(nsColor: emptyBase(darkMode: darkMode))
+    }
+
+    static var trackGradient: LinearGradient {
+        gradient(base: NSColor.controlBackgroundColor)
+    }
+
+    static func scannedGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.scanned, darkMode: darkMode))
+    }
+
+    static func deferredGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.deferred, darkMode: darkMode))
+    }
+
+    static func remainingGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
+    }
+
+    static func emptyGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: emptyBase(darkMode: darkMode))
+    }
+
+    static var glossGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color.white.opacity(0.33), location: 0.0),
+                .init(color: Color.white.opacity(0.12), location: 0.33),
+                .init(color: Color.white.opacity(0.03), location: 0.58),
+                .init(color: Color.clear, location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var lowerShadeGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color.clear, location: 0.0),
+                .init(color: Color.black.opacity(0.08), location: 0.62),
+                .init(color: Color.black.opacity(0.2), location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var rimGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.55), Color.black.opacity(0.3)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    static var innerHighlightGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.28), Color.clear],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private static func gradient(base: NSColor) -> LinearGradient {
+        let top = base.blended(withFraction: 0.28, of: .white) ?? base
+        let mid = base
+        let bottom = base.blended(withFraction: 0.2, of: .black) ?? base
+        return LinearGradient(
+            stops: [
+                .init(color: Color(nsColor: top), location: 0.0),
+                .init(color: Color(nsColor: mid), location: 0.5),
+                .init(color: Color(nsColor: bottom), location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private static func emptyBase(darkMode: Bool) -> NSColor {
+        darkMode
+            ? NSColor(calibratedWhite: 0.34, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.82, alpha: 1.0)
+    }
+}
+
+private struct ScanCapacityLegendItem: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text("\(title): \(value)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct ScanCapacityBarView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let segments: NativeCapacitySegments
+    let isRunning: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let darkMode = colorScheme == .dark
+            let total = max(Double(segments.totalBytes), 1.0)
+            let barWidth = geometry.size.width
+            let barHeight = geometry.size.height
+            let widthForBytes: (UInt64) -> CGFloat = { bytes in
+                barWidth * CGFloat(Double(bytes) / total)
+            }
+            let scannedWidth = widthForBytes(segments.scannedBytes)
+            let deferredWidth = widthForBytes(segments.deferredBytes)
+            let remainingWidth = widthForBytes(segments.remainingBytes)
+            let emptyWidth = widthForBytes(segments.emptyBytes)
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.trackGradient)
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(ScanCapacityPalette.scannedGradient(darkMode: darkMode))
+                        .frame(width: scannedWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.deferredGradient(darkMode: darkMode))
+                        .frame(width: deferredWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.remainingGradient(darkMode: darkMode))
+                        .frame(width: remainingWidth)
+                    Rectangle()
+                        .fill(ScanCapacityPalette.emptyGradient(darkMode: darkMode))
+                        .frame(width: emptyWidth)
+                }
+                .clipShape(Capsule(style: .continuous))
+
+                if isRunning {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        let phase = timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 1.8) / 1.8
+                        let highlightWidth = min(max(barWidth * 0.2, 52), 180)
+                        let offset = (barWidth + highlightWidth) * CGFloat(phase) - highlightWidth
+
+                        ZStack(alignment: .leading) {
+                            Color.clear
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0),
+                                    Color.white.opacity(0.3),
+                                    Color.white.opacity(0)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: highlightWidth, height: barHeight)
+                            .offset(x: offset)
+                        }
+                        .frame(width: barWidth, height: barHeight, alignment: .leading)
+                    }
+                    .clipShape(Capsule(style: .continuous))
+                    .allowsHitTesting(false)
+                }
+
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.glossGradient)
+
+                Capsule(style: .continuous)
+                    .fill(ScanCapacityPalette.lowerShadeGradient)
+
+                Capsule(style: .continuous)
+                    .strokeBorder(ScanCapacityPalette.rimGradient, lineWidth: 1)
+
+                Capsule(style: .continuous)
+                    .inset(by: 1)
+                    .stroke(ScanCapacityPalette.innerHighlightGradient, lineWidth: 0.7)
+            }
+            .shadow(color: Color.black.opacity(0.12), radius: 0.8, x: 0, y: 0.6)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Disk scan capacity")
+        .accessibilityValue(
+            "Scanned \(segments.scannedBytes) bytes, deferred \(segments.deferredBytes) bytes, pending \(segments.remainingBytes) bytes, empty \(segments.emptyBytes) bytes"
+        )
+    }
+}
 private struct SetupAdvancedSheetView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.dismiss) private var dismiss
@@ -685,7 +1081,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard row >= 0,
                   let item = outlineView.item(atRow: row),
                   let nodeId = nodeId(from: item),
-                  parent.store.node(nodeId) != nil else {
+                  let node = parent.store.node(nodeId) else {
                 return nil
             }
 
@@ -708,13 +1104,32 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 action: .copyPath,
                 enabled: true
             )
+            let expandDeferredItem = contextMenuItem(
+                title: "Expand Deferred",
+                action: .expandDeferred,
+                enabled: node.childrenState == .collapsedByThreshold
+            )
+            let retryItem = contextMenuItem(
+                title: "Retry",
+                action: .retryScan,
+                enabled: node.errorFlag
+            )
             let deleteItem = contextMenuItem(
                 title: "Delete…",
                 action: .deleteToTrash,
                 enabled: parent.store.canDeleteNode(nodeId: nodeId)
             )
 
-            menu.items = [showItem, revealParentItem, copyPathItem, NSMenuItem.separator(), deleteItem]
+            menu.items = [
+                showItem,
+                revealParentItem,
+                copyPathItem,
+                NSMenuItem.separator(),
+                expandDeferredItem,
+                retryItem,
+                NSMenuItem.separator(),
+                deleteItem
+            ]
             return menu
         }
 
@@ -877,13 +1292,15 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let identifier = NSUserInterfaceItemIdentifier("HierarchySizeCell")
             let cell: NSTableCellView
             let label: NSTextField
+            let statusLane: NSView
             let deferredIconView: NSImageView
             let errorIconView: NSImageView
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
                 label = reused.textField ?? NSTextField(labelWithString: "")
-                deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView()
-                errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView()
+                deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView(frame: .zero)
+                errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView(frame: .zero)
+                statusLane = deferredIconView.superview ?? NSView(frame: .zero)
             } else {
                 cell = NSTableCellView(frame: .zero)
                 cell.identifier = identifier
@@ -895,49 +1312,56 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 label.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
                 label.textColor = .secondaryLabelColor
 
+                let statusLane = NSView(frame: .zero)
+                statusLane.translatesAutoresizingMaskIntoConstraints = false
+
                 let deferredIconView = NSImageView(frame: .zero)
                 deferredIconView.translatesAutoresizingMaskIntoConstraints = false
+                deferredIconView.tag = 1001
                 deferredIconView.imageScaling = .scaleProportionallyDown
                 deferredIconView.contentTintColor = .systemOrange
-                deferredIconView.tag = 1001
-                deferredIconView.isHidden = true
                 deferredIconView.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
 
                 let errorIconView = NSImageView(frame: .zero)
                 errorIconView.translatesAutoresizingMaskIntoConstraints = false
+                errorIconView.tag = 1002
                 errorIconView.imageScaling = .scaleProportionallyDown
                 errorIconView.contentTintColor = .systemRed
-                errorIconView.tag = 1002
-                errorIconView.isHidden = true
                 errorIconView.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
 
-                let stack = NSStackView(views: [label, deferredIconView, errorIconView])
-                stack.translatesAutoresizingMaskIntoConstraints = false
-                stack.orientation = .horizontal
-                stack.alignment = .centerY
-                stack.spacing = 4
-                stack.distribution = .fill
-
                 label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                deferredIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
-                errorIconView.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-                cell.addSubview(stack)
+                statusLane.addSubview(deferredIconView)
+                statusLane.addSubview(errorIconView)
+                cell.addSubview(label)
+                cell.addSubview(statusLane)
                 cell.textField = label
 
                 NSLayoutConstraint.activate([
-                    stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                    stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-                    stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                    deferredIconView.widthAnchor.constraint(equalToConstant: 12),
-                    deferredIconView.heightAnchor.constraint(equalToConstant: 12),
-                    errorIconView.widthAnchor.constraint(equalToConstant: 12),
-                    errorIconView.heightAnchor.constraint(equalToConstant: 12)
+                    label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                    label.trailingAnchor.constraint(equalTo: statusLane.leadingAnchor, constant: -hierarchySizeToStatusGap),
+                    label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+
+                    statusLane.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                    statusLane.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    statusLane.widthAnchor.constraint(equalToConstant: hierarchyStatusLaneWidth),
+                    statusLane.heightAnchor.constraint(greaterThanOrEqualToConstant: hierarchyStatusIconWidth),
+
+                    deferredIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
+                    deferredIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    deferredIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    deferredIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+
+                    errorIconView.centerXAnchor.constraint(equalTo: statusLane.centerXAnchor),
+                    errorIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    errorIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth)
                 ])
 
                 label.stringValue = parent.store.nodeSizeLabel(node)
-                configureSizeStatusIcons(
+                configureSizeStatusViews(
                     node: node,
+                    statusLane: statusLane,
                     deferredIconView: deferredIconView,
                     errorIconView: errorIconView
                 )
@@ -946,30 +1370,71 @@ private struct HierarchyOutlineView: NSViewRepresentable {
 
             label.stringValue = parent.store.nodeSizeLabel(node)
             label.textColor = .secondaryLabelColor
-            configureSizeStatusIcons(
+            configureSizeStatusViews(
                 node: node,
+                statusLane: statusLane,
                 deferredIconView: deferredIconView,
                 errorIconView: errorIconView
             )
             return cell
         }
 
-        private func configureSizeStatusIcons(
+        private func configureSizeStatusViews(
             node: NativeNode,
+            statusLane: NSView,
             deferredIconView: NSImageView,
             errorIconView: NSImageView
         ) {
             let showsDeferred = node.childrenState == .collapsedByThreshold
-            deferredIconView.isHidden = !showsDeferred
-            deferredIconView.toolTip = showsDeferred
-                ? "Deferred: details were collapsed by threshold."
-                : nil
-
             let showsError = node.errorFlag
-            errorIconView.isHidden = !showsError
-            errorIconView.toolTip = showsError
-                ? "Error: this path could not be fully read."
-                : nil
+
+            // Single-slot status lane: show one centered icon for consistent alignment.
+            // Error takes precedence when both states are present.
+            if showsError {
+                errorIconView.isHidden = false
+                deferredIconView.isHidden = true
+            } else if showsDeferred {
+                deferredIconView.isHidden = false
+                errorIconView.isHidden = true
+            } else {
+                deferredIconView.isHidden = true
+                errorIconView.isHidden = true
+            }
+
+            let tooltip = statusTooltip(nodeId: node.id, showsDeferred: showsDeferred, showsError: showsError)
+            statusLane.toolTip = tooltip
+            deferredIconView.toolTip = tooltip
+            errorIconView.toolTip = tooltip
+        }
+
+        private func deferredTooltip(nodeId: UInt64) -> String {
+            let nodePath = parent.store.path(for: nodeId)
+            return """
+            Deferred: subtree details were collapsed by scan threshold.
+            \(nodePath)
+            """
+        }
+
+        private func errorTooltip(nodeId: UInt64) -> String {
+            let nodePath = parent.store.path(for: nodeId)
+            let description = parent.store.nodeErrorDescription(nodeId: nodeId)
+            return """
+            Error: \(description)
+            \(nodePath)
+            """
+        }
+
+        private func statusTooltip(nodeId: UInt64, showsDeferred: Bool, showsError: Bool) -> String? {
+            if showsDeferred && showsError {
+                return "\(deferredTooltip(nodeId: nodeId))\n\n\(errorTooltip(nodeId: nodeId))"
+            }
+            if showsDeferred {
+                return deferredTooltip(nodeId: nodeId)
+            }
+            if showsError {
+                return errorTooltip(nodeId: nodeId)
+            }
+            return nil
         }
 
         private func statusIcon(key: String, symbol: String) -> NSImage {
@@ -1072,6 +1537,10 @@ private struct HierarchyOutlineView: NSViewRepresentable {
     }
 }
 
+private let hierarchySizeToStatusGap: CGFloat = 6
+private let hierarchyStatusIconWidth: CGFloat = 12
+private let hierarchyStatusLaneWidth: CGFloat = hierarchyStatusIconWidth + 2
+
 private final class HierarchyOutlineNativeView: NSOutlineView {
     var contextMenuProvider: ((Int) -> NSMenu?)?
 
@@ -1098,9 +1567,6 @@ private final class HierarchyOutlineContainerView: NSView {
     private let minSizeColumnWidth: CGFloat = 108
     private let maxSizeColumnWidth: CGFloat = 260
     private let sizeColumnPadding: CGFloat = 16
-    private let sizeToStatusGap: CGFloat = 6
-    private let statusIconWidth: CGFloat = 12
-    private let statusIconSpacing: CGFloat = 4
     private let sizeValueFont = NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
 
     private let scrollView = NSScrollView()
@@ -1181,11 +1647,12 @@ private final class HierarchyOutlineContainerView: NSView {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
-        scrollView.backgroundColor = .controlBackgroundColor
-        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .clear
+        scrollView.drawsBackground = false
 
         outlineView.headerView = NSTableHeaderView()
         outlineView.style = .sourceList
+        outlineView.backgroundColor = .clear
         outlineView.rowSizeStyle = .default
         outlineView.floatsGroupRows = false
         outlineView.focusRingType = .default
@@ -1503,20 +1970,7 @@ private final class HierarchyOutlineContainerView: NSView {
 
             let sizeText = store.nodeSizeLabel(node)
             var width = (sizeText as NSString).size(withAttributes: [.font: sizeValueFont]).width
-            let hasDeferred = node.childrenState == .collapsedByThreshold
-            let hasError = node.errorFlag
-            if hasDeferred || hasError {
-                width += sizeToStatusGap
-                if hasDeferred {
-                    width += statusIconWidth
-                }
-                if hasDeferred && hasError {
-                    width += statusIconSpacing
-                }
-                if hasError {
-                    width += statusIconWidth
-                }
-            }
+            width += hierarchySizeToStatusGap + hierarchyStatusLaneWidth
 
             if width > widest {
                 widest = width
@@ -1525,8 +1979,8 @@ private final class HierarchyOutlineContainerView: NSView {
 
         if widest == 0 {
             widest = ("999.99 GiB" as NSString).size(withAttributes: [.font: sizeValueFont]).width
-                + sizeToStatusGap
-                + statusIconWidth
+                + hierarchySizeToStatusGap
+                + hierarchyStatusLaneWidth
         }
 
         let padded = widest + sizeColumnPadding

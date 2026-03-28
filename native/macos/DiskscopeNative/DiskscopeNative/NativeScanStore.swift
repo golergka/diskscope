@@ -24,6 +24,66 @@ private let kChildrenPartial = UInt8(DS_CHILDREN_STATE_PARTIAL)
 private let kChildrenFinal = UInt8(DS_CHILDREN_STATE_FINAL)
 private let kChildrenCollapsed = UInt8(DS_CHILDREN_STATE_COLLAPSED_BY_THRESHOLD)
 
+enum NativeProgressHue: CaseIterable {
+    case scanned
+    case deferred
+    case remaining
+
+    var degrees: CGFloat {
+        switch self {
+        case .scanned:
+            return 212
+        case .deferred:
+            return 28
+        case .remaining:
+            return 52
+        }
+    }
+}
+
+enum NativeThemeColorPalette {
+    // Keep saturation/brightness fixed per mode so treemap labels can stay a single color.
+    private static let lightSaturation: CGFloat = 0.66
+    private static let lightBrightness: CGFloat = 0.90
+    private static let darkSaturation: CGFloat = 0.66
+    private static let darkBrightness: CGFloat = 0.63
+
+    static func hueColor(
+        hueDegrees: CGFloat,
+        darkMode: Bool,
+        alpha: CGFloat = 1.0
+    ) -> NSColor {
+        let normalizedHue = ((hueDegrees.truncatingRemainder(dividingBy: 360)) + 360)
+            .truncatingRemainder(dividingBy: 360) / 360
+        let saturation = darkMode ? darkSaturation : lightSaturation
+        let brightness = darkMode ? darkBrightness : lightBrightness
+        return NSColor(
+            calibratedHue: normalizedHue,
+            saturation: saturation,
+            brightness: brightness,
+            alpha: alpha
+        )
+    }
+
+    static func hashedHueColor(
+        hash: UInt64,
+        darkMode: Bool,
+        alpha: CGFloat = 1.0
+    ) -> NSColor {
+        hueColor(hueDegrees: CGFloat(hash % 360), darkMode: darkMode, alpha: alpha)
+    }
+
+    static func progressSegmentColor(_ hue: NativeProgressHue, darkMode: Bool) -> NSColor {
+        hueColor(hueDegrees: hue.degrees, darkMode: darkMode)
+    }
+
+    static func treemapLabelColor(darkMode: Bool) -> NSColor {
+        darkMode
+            ? NSColor(calibratedWhite: 0.96, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+    }
+}
+
 enum NativeDiagnostics {
     private static let logger = Logger(subsystem: "com.diskscope.native", category: "runtime")
     private static let enabledFlag = ProcessInfo.processInfo.environment["DISKSCOPE_NATIVE_TRACE"] == "1"
@@ -174,7 +234,9 @@ enum NativeNodeContextAction: Int {
     case showInFinder = 1
     case revealParentInFinder = 2
     case copyPath = 3
-    case deleteToTrash = 4
+    case expandDeferred = 4
+    case retryScan = 5
+    case deleteToTrash = 6
 }
 
 struct NativeUpgradePrompt: Identifiable, Equatable {
@@ -237,6 +299,15 @@ struct NativeProgress {
     var queuedJobs: UInt64 = 0
     var activeWorkers: UInt64 = 0
     var elapsedMs: UInt64 = 0
+}
+
+struct NativeCapacitySegments {
+    var scannedBytes: UInt64
+    var deferredBytes: UInt64
+    var remainingBytes: UInt64
+    var emptyBytes: UInt64
+    var occupiedBytes: UInt64
+    var totalBytes: UInt64
 }
 
 struct NativeLaunchOptions {
@@ -404,6 +475,7 @@ final class NativeScanStore: ObservableObject {
     @Published private(set) var pendingPatchBacklog: Int = 0
     @Published private(set) var errorNodeCount: Int = 0
     @Published private(set) var deferredNodeCount: Int = 0
+    @Published private(set) var deferredCollapsedBytes: UInt64 = 0
     @Published private(set) var runtimeErrors: [NativeRuntimeErrorEntry] = []
     @Published private(set) var proAvailable: Bool = false
     @Published private(set) var proEnabled: Bool = false
@@ -565,8 +637,62 @@ final class NativeScanStore: ObservableObject {
         NativeScanStore.humanBytes(progress.totalBytes)
     }
 
+    var capacitySegments: NativeCapacitySegments {
+        let occupied = occupiedProgressBytes
+        let scanned = min(progress.bytesSeen, occupied)
+        let deferred = min(deferredCollapsedBytes, scanned)
+        let scannedDetailed = NativeScanStore.saturatingSubtract(scanned, deferred)
+        let remaining = NativeScanStore.saturatingSubtract(occupied, scanned)
+        let total: UInt64
+        if progress.totalBytes > 0 {
+            total = max(progress.totalBytes, occupied)
+        } else {
+            total = occupied
+        }
+        let empty = NativeScanStore.saturatingSubtract(total, occupied)
+
+        return NativeCapacitySegments(
+            scannedBytes: scannedDetailed,
+            deferredBytes: deferred,
+            remainingBytes: remaining,
+            emptyBytes: empty,
+            occupiedBytes: occupied,
+            totalBytes: total
+        )
+    }
+
+    var scannedSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.scannedBytes)
+    }
+
+    var deferredSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.deferredBytes)
+    }
+
+    var remainingSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.remainingBytes)
+    }
+
+    var emptySegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.emptyBytes)
+    }
+
+    var totalSegmentGbLabel: String {
+        NativeScanStore.humanGigabytes(capacitySegments.totalBytes)
+    }
+
+    private var occupiedProgressBytes: UInt64 {
+        if progress.occupiedBytes > 0 {
+            return progress.occupiedBytes
+        }
+        if progress.targetBytes > 0 {
+            return progress.targetBytes
+        }
+        return progress.bytesSeen
+    }
+
     var progressFraction: Double {
-        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+        let denominator = occupiedProgressBytes
         guard denominator > 0 else {
             return 0
         }
@@ -575,12 +701,23 @@ final class NativeScanStore: ObservableObject {
     }
 
     var exploredFraction: Double {
-        let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
-        guard denominator > 0 else {
-            return progress.bytesSeen > 0 ? 1.0 : 0.0
+        let occupied = occupiedProgressBytes
+        let denominator: UInt64
+        if progress.totalBytes > 0 {
+            denominator = max(progress.totalBytes, occupied)
+        } else {
+            denominator = occupied
         }
-        let scanned = min(progress.bytesSeen, denominator)
-        return Double(scanned) / Double(denominator)
+        guard denominator > 0 else {
+            return 0.0
+        }
+
+        // Treemap fill should represent known occupied bytes out of total disk capacity.
+        // `bytesSeen` can lag collapsed/deferred subtree sizes, so also include root snapshot size.
+        let scannedFromProgress = min(progress.bytesSeen, occupied)
+        let scannedFromTree = min(nodes[rootNodeId]?.sizeBytes ?? 0, occupied)
+        let explored = max(scannedFromProgress, scannedFromTree)
+        return Double(min(explored, denominator)) / Double(denominator)
     }
 
     func showSetupScreen() {
@@ -752,6 +889,41 @@ final class NativeScanStore: ObservableObject {
         startScan()
     }
 
+    func enqueueDeferredExpansion(nodeId: UInt64) {
+        guard let node = nodes[nodeId],
+              node.childrenState == .collapsedByThreshold else {
+            NSSound.beep()
+            return
+        }
+        guard let handle = session else {
+            NSSound.beep()
+            statusLine = "Cannot expand deferred subtree: no active scan session"
+            return
+        }
+
+        let queued = ds_scan_enqueue_expand_ref(handle, nodeId) != 0
+        guard queued else {
+            NSSound.beep()
+            statusLine = "Failed to queue deferred expansion for \(path(for: nodeId))"
+            return
+        }
+
+        expandedNodes.insert(nodeId)
+        scanState = .running
+        statusLine = "Queued deferred expansion: \(path(for: nodeId))"
+        updateDockTileProgress()
+    }
+
+    func retryNode(nodeId: UInt64) {
+        guard let node = nodes[nodeId], node.errorFlag else {
+            NSSound.beep()
+            return
+        }
+
+        statusLine = "Retrying scan for \(path(for: nodeId))..."
+        startScan()
+    }
+
     func resetZoom() {
         guard zoomNodeId != rootNodeId else {
             return
@@ -859,6 +1031,19 @@ final class NativeScanStore: ObservableObject {
             path.appendPathComponent(segment)
         }
         return path.path
+    }
+
+    func nodeErrorDescription(nodeId: UInt64) -> String {
+        guard let node = nodes[nodeId], node.errorFlag else {
+            return "This path could not be fully read."
+        }
+
+        switch node.kind {
+        case .directory, .collapsedDirectory:
+            return "Directory could not be fully read (permission denied or I/O error)."
+        case .file:
+            return "File metadata could not be fully read (permission denied or I/O error)."
+        }
     }
 
     func isExpandable(_ node: NativeNode) -> Bool {
@@ -1232,6 +1417,9 @@ final class NativeScanStore: ObservableObject {
         }
 
         updateDockTileProgress()
+        if case .completed = terminal {
+            return
+        }
         teardownSession(cancel: false, synchronous: false)
     }
 
@@ -1242,6 +1430,7 @@ final class NativeScanStore: ObservableObject {
         let previousSize = existing?.sizeBytes
         let previousErrorFlag = existing?.errorFlag ?? false
         let previousDeferred = existing?.childrenState == .collapsedByThreshold
+        let previousDeferredBytes = previousDeferred ? (existing?.sizeBytes ?? 0) : 0
 
         var node = existing ?? NativeNode(
             id: patch.id,
@@ -1285,6 +1474,19 @@ final class NativeScanStore: ObservableObject {
             } else {
                 deferredNodeCount = max(0, deferredNodeCount - 1)
             }
+        }
+
+        let nowDeferredBytes = nowDeferred ? patch.sizeBytes : 0
+        if nowDeferredBytes > previousDeferredBytes {
+            deferredCollapsedBytes = NativeScanStore.saturatingAdd(
+                deferredCollapsedBytes,
+                nowDeferredBytes - previousDeferredBytes
+            )
+        } else if previousDeferredBytes > nowDeferredBytes {
+            deferredCollapsedBytes = NativeScanStore.saturatingSubtract(
+                deferredCollapsedBytes,
+                previousDeferredBytes - nowDeferredBytes
+            )
         }
 
         if let oldParent = previousParent, oldParent != patch.parentId, var parent = nodes[oldParent] {
@@ -1335,6 +1537,7 @@ final class NativeScanStore: ObservableObject {
         pendingPatchBacklog = 0
         errorNodeCount = 0
         deferredNodeCount = 0
+        deferredCollapsedBytes = 0
         runtimeErrors.removeAll(keepingCapacity: true)
         errorNodeIds.removeAll(keepingCapacity: true)
         rootNodeId = 0
@@ -1593,7 +1796,7 @@ final class NativeScanStore: ObservableObject {
 
     private func updateDockTileProgress() {
         if scanState == .running {
-            let denominator = progress.occupiedBytes > 0 ? progress.occupiedBytes : progress.targetBytes
+            let denominator = occupiedProgressBytes
             guard denominator > 0 else {
                 dockProgress.setProgress(0)
                 return
@@ -1701,6 +1904,20 @@ final class NativeScanStore: ObservableObject {
             idx += 1
         }
         return String(format: "%.2f %@", value, units[idx])
+    }
+
+    private static func humanGigabytes(_ bytes: UInt64) -> String {
+        let gigabytes = Double(bytes) / 1_000_000_000.0
+        return String(format: "%.1f GB", gigabytes)
+    }
+
+    private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : sum
+    }
+
+    private static func saturatingSubtract(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        lhs >= rhs ? lhs - rhs : 0
     }
 
     private func parsedPositiveInt(_ text: String) -> Int? {

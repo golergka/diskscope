@@ -150,10 +150,7 @@ pub extern "C" fn ds_scan_start(
     let bridge_thread = thread::spawn(move || {
         while let Ok(event) = rx.recv() {
             dispatch_event(&event, callback, user_data_raw as *mut c_void);
-            if matches!(
-                event,
-                ScanEvent::Completed | ScanEvent::Cancelled | ScanEvent::Error(_)
-            ) {
+            if matches!(event, ScanEvent::Cancelled | ScanEvent::Error(_)) {
                 break;
             }
         }
@@ -179,6 +176,22 @@ pub extern "C" fn ds_scan_cancel(handle: *mut DsSessionHandle) {
 }
 
 #[no_mangle]
+pub extern "C" fn ds_scan_enqueue_expand(handle: *mut DsSessionHandle, node_id: u64) -> u8 {
+    let Some(handle_ref) = (unsafe { handle.as_ref() }) else {
+        return 0;
+    };
+
+    let Ok(guard) = handle_ref.scan_handle.lock() else {
+        return 0;
+    };
+    let Some(scan) = guard.as_ref() else {
+        return 0;
+    };
+
+    scan.enqueue_expand(node_id) as u8
+}
+
+#[no_mangle]
 pub extern "C" fn ds_scan_join(handle: *mut DsSessionHandle) {
     let Some(handle_ref) = (unsafe { handle.as_ref() }) else {
         return;
@@ -186,6 +199,7 @@ pub extern "C" fn ds_scan_join(handle: *mut DsSessionHandle) {
 
     if let Ok(mut guard) = handle_ref.scan_handle.lock() {
         if let Some(scan) = guard.as_mut() {
+            scan.cancel();
             scan.join();
         }
     }
@@ -373,7 +387,10 @@ fn encode_children_state(state: ChildrenState) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ds_ffi_abi_version, ds_scan_free, ds_scan_join, ds_scan_start, DsScanRequest};
+    use super::{
+        ds_ffi_abi_version, ds_scan_enqueue_expand, ds_scan_free, ds_scan_join, ds_scan_start,
+        DsScanRequest,
+    };
     use super::{ds_pro_capabilities, DsPurchaseState};
     use std::ffi::CString;
     use std::fs;
@@ -424,6 +441,39 @@ mod tests {
         ds_scan_free(handle);
 
         assert!(counter.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn enqueue_expand_is_accepted_while_session_is_active() {
+        let temp = tempdir().unwrap();
+        let root_path = temp.path().to_path_buf();
+        fs::create_dir(root_path.join("nested")).unwrap();
+        fs::write(root_path.join("nested").join("b.bin"), vec![2_u8; 2048]).unwrap();
+
+        let root = CString::new(root_path.to_string_lossy().to_string()).unwrap();
+        let counter = AtomicUsize::new(0);
+        let request = DsScanRequest {
+            root_path: root.as_ptr(),
+            include_hidden: 0,
+            follow_symlinks: 0,
+            one_filesystem: 1,
+            profile: 1,
+            worker_override: 1,
+            queue_limit: 8,
+            threshold_override: 0,
+        };
+
+        let handle = ds_scan_start(
+            &request,
+            callback,
+            (&counter as *const AtomicUsize).cast_mut().cast(),
+        );
+        assert!(!handle.is_null());
+
+        assert_eq!(ds_scan_enqueue_expand(handle, 1), 1);
+
+        ds_scan_join(handle);
+        ds_scan_free(handle);
     }
 
     #[test]
