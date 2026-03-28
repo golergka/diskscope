@@ -224,8 +224,7 @@ struct ContentView: View {
                 trailing: treemapPane,
                 leadingMinWidth: 320,
                 leadingIdealWidth: 380,
-                leadingMaxWidth: 480,
-                dividerHitWidth: 24
+                leadingMaxWidth: 480
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -467,7 +466,6 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
     let leadingMinWidth: CGFloat
     let leadingIdealWidth: CGFloat
     let leadingMaxWidth: CGFloat
-    let dividerHitWidth: CGFloat
 
     private let trailingMinWidth: CGFloat = 320
 
@@ -488,8 +486,7 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
             leadingMinWidth: leadingMinWidth,
             leadingIdealWidth: leadingIdealWidth,
             leadingMaxWidth: leadingMaxWidth,
-            trailingMinWidth: trailingMinWidth,
-            dividerHitWidth: dividerHitWidth
+            trailingMinWidth: trailingMinWidth
         )
         return view
     }
@@ -506,8 +503,7 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
             leadingMinWidth: leadingMinWidth,
             leadingIdealWidth: leadingIdealWidth,
             leadingMaxWidth: leadingMaxWidth,
-            trailingMinWidth: trailingMinWidth,
-            dividerHitWidth: dividerHitWidth
+            trailingMinWidth: trailingMinWidth
         )
     }
 
@@ -546,30 +542,6 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
         func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
             true
         }
-
-        func splitView(
-            _ splitView: NSSplitView,
-            effectiveRect proposedEffectiveRect: NSRect,
-            forDrawnRect drawnRect: NSRect,
-            ofDividerAt dividerIndex: Int
-        ) -> NSRect {
-            let requestedHitWidth = (splitView as? InvisibleDividerSplitView)?.dragHitWidth ?? splitView.dividerThickness
-            let hitWidth = max(requestedHitWidth, splitView.dividerThickness)
-            if splitView.isVertical {
-                return NSRect(
-                    x: drawnRect.midX - hitWidth * 0.5,
-                    y: splitView.bounds.minY,
-                    width: hitWidth,
-                    height: splitView.bounds.height
-                )
-            }
-            return NSRect(
-                x: splitView.bounds.minX,
-                y: drawnRect.midY - hitWidth * 0.5,
-                width: splitView.bounds.width,
-                height: hitWidth
-            )
-        }
     }
 }
 
@@ -603,14 +575,12 @@ private final class InvisibleDividerResultsSplitContainer: NSView {
         leadingMinWidth: CGFloat,
         leadingIdealWidth: CGFloat,
         leadingMaxWidth: CGFloat,
-        trailingMinWidth: CGFloat,
-        dividerHitWidth: CGFloat
+        trailingMinWidth: CGFloat
     ) {
         self.leadingMinWidth = leadingMinWidth
         self.leadingIdealWidth = leadingIdealWidth
         self.leadingMaxWidth = leadingMaxWidth
         self.trailingMinWidth = trailingMinWidth
-        splitView.dragHitWidth = dividerHitWidth
         applyInitialSplitPositionIfNeeded()
     }
 
@@ -672,8 +642,6 @@ private final class InvisibleDividerResultsSplitContainer: NSView {
 }
 
 private final class InvisibleDividerSplitView: NSSplitView {
-    var dragHitWidth: CGFloat = 24
-
     override var dividerThickness: CGFloat {
         1
     }
