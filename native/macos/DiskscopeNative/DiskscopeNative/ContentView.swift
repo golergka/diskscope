@@ -715,7 +715,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let expandDeferredItem = contextMenuItem(
                 title: "Expand Deferred",
                 action: .expandDeferred,
-                enabled: node.childrenState == .collapsedByThreshold
+                enabled: parent.store.isNodeDeferredForDisplay(node)
             )
             let retryItem = contextMenuItem(
                 title: "Retry",
@@ -1014,24 +1014,24 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             errorIconView: NSImageView,
             inProgressIconView: NSImageView
         ) {
-            let showsDeferred = node.childrenState == .collapsedByThreshold
+            let showsDeferred = parent.store.isNodeDeferredForDisplay(node)
             let showsError = node.errorFlag
             let showsInProgress = parent.store.isNodeInProgress(node)
 
             // Single-slot status lane: show one centered icon for consistent alignment.
-            // Error takes precedence when both states are present.
+            // Error takes precedence, then in-progress, then deferred.
             if showsError {
                 errorIconView.isHidden = false
                 deferredIconView.isHidden = true
-                inProgressIconView.isHidden = true
-            } else if showsDeferred {
-                deferredIconView.isHidden = false
-                errorIconView.isHidden = true
                 inProgressIconView.isHidden = true
             } else if showsInProgress {
                 inProgressIconView.isHidden = false
                 deferredIconView.isHidden = true
                 errorIconView.isHidden = true
+            } else if showsDeferred {
+                deferredIconView.isHidden = false
+                errorIconView.isHidden = true
+                inProgressIconView.isHidden = true
             } else {
                 deferredIconView.isHidden = true
                 errorIconView.isHidden = true
