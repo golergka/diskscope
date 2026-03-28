@@ -885,29 +885,42 @@ final class TreemapCanvas: NSView {
         borderPath.stroke()
     }
 
-    private func color(for node: NativeNode, depth _: Int, darkMode: Bool) -> NSColor {
+    private func color(for node: NativeNode, depth: Int, darkMode: Bool) -> NSColor {
         switch node.kind {
         case .file:
             let ext = fileExtension(for: node.name)
-            return NativeThemeColorPalette.hashedHueColor(
+            let base = NativeThemeColorPalette.hashedHueColor(
                 hash: stableHash(ext),
                 darkMode: darkMode,
-                alpha: 0.96
+                alpha: 1.0
             )
+            let softened = darkMode
+                ? (base.blended(withFraction: 0.12, of: NSColor.white) ?? base)
+                : (base.blended(withFraction: 0.10, of: NSColor.black) ?? base)
+            return softened.withAlphaComponent(0.96)
 
         case .directory:
-            return NativeThemeColorPalette.hashedHueColor(
+            let neutral = darkMode
+                ? NSColor(calibratedWhite: min(0.42, 0.25 + CGFloat(depth) * 0.02), alpha: 1.0)
+                : NSColor(calibratedWhite: max(0.72, 0.92 - CGFloat(depth) * 0.02), alpha: 1.0)
+            let tint = NativeThemeColorPalette.hashedHueColor(
                 hash: stableHash(node.name),
                 darkMode: darkMode,
-                alpha: 0.95
+                alpha: 1.0
             )
+            let mixed = neutral.blended(withFraction: darkMode ? 0.18 : 0.14, of: tint) ?? neutral
+            return mixed.withAlphaComponent(0.95)
 
         case .collapsedDirectory:
-            return NativeThemeColorPalette.hashedHueColor(
+            let base = NativeThemeColorPalette.hashedHueColor(
                 hash: stableHash("_collapsed_\(node.name)"),
                 darkMode: darkMode,
-                alpha: 0.96
+                alpha: 1.0
             )
+            let mixed = darkMode
+                ? (base.blended(withFraction: 0.24, of: NSColor.black) ?? base)
+                : (base.blended(withFraction: 0.18, of: NSColor.white) ?? base)
+            return mixed.withAlphaComponent(0.96)
         }
     }
 
