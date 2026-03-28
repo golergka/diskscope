@@ -773,6 +773,20 @@ final class NativeScanStore: ObservableObject {
             return
         }
 
+        if var queuedNode = nodes[nodeId] {
+            let wasDeferred = queuedNode.childrenState == .collapsedByThreshold
+            queuedNode.kind = .directory
+            queuedNode.sizeState = .partial
+            queuedNode.childrenState = .partial
+            queuedNode.children.removeAll(keepingCapacity: false)
+            nodes[nodeId] = queuedNode
+            if wasDeferred {
+                deferredNodeCount = max(0, deferredNodeCount - 1)
+            }
+            bumpChildOrderRevision(for: nodeId)
+            modelVersion &+= 1
+        }
+
         expandedNodes.insert(nodeId)
         scanState = .running
         statusLine = "Queued deferred expansion: \(path(for: nodeId))"
@@ -929,7 +943,30 @@ final class NativeScanStore: ObservableObject {
         node.name
     }
 
+    func isNodeInProgress(_ node: NativeNode) -> Bool {
+        guard node.kind != .file else {
+            return false
+        }
+        if node.errorFlag || node.childrenState == .collapsedByThreshold {
+            return false
+        }
+
+        if node.sizeState == .unknown {
+            return true
+        }
+
+        if node.sizeState == .partial, node.children.isEmpty, node.childrenState == .partial {
+            return true
+        }
+
+        return false
+    }
+
     func nodeSizeLabel(_ node: NativeNode) -> String {
+        if isNodeInProgress(node) {
+            return ""
+        }
+
         switch node.sizeState {
         case .unknown:
             return "Scanning..."
