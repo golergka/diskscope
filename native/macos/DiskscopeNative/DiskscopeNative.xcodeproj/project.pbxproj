@@ -216,6 +216,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../../crates/diskscope-ffi/include",
 				);
+				ENABLE_DEBUG_DYLIB = NO;
 				INFOPLIST_FILE = DiskscopeNative/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -248,6 +249,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../../crates/diskscope-ffi/include",
 				);
+				ENABLE_DEBUG_DYLIB = NO;
 				INFOPLIST_FILE = DiskscopeNative/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

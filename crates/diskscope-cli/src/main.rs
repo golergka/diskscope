@@ -2,7 +2,7 @@ use diskscope_core::scanner;
 use diskscope_egui::app::{self, UiLaunchOptions};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -75,6 +75,7 @@ struct NativeArgs {
     start: bool,
     path: Option<PathBuf>,
     pro_unlocked: bool,
+    foreground: bool,
 }
 
 fn run_native_ui(args: Vec<String>) {
@@ -100,6 +101,31 @@ fn run_native_ui(args: Vec<String>) {
     };
     eprintln!("launching native app: {}", app_path.display());
 
+    if native_args.foreground {
+        let executable = native_app_executable_path(&app_path);
+        if !executable.exists() {
+            eprintln!(
+                "native app executable was not found at {}",
+                executable.display()
+            );
+            std::process::exit(1);
+        }
+        eprintln!("launching in foreground: {}", executable.display());
+        let mut cmd = Command::new(executable);
+        append_native_launch_args(&mut cmd, &native_args);
+        match cmd.status() {
+            Ok(status) if status.success() => return,
+            Ok(status) => {
+                eprintln!("native app exited with status: {status}");
+                std::process::exit(1);
+            }
+            Err(error) => {
+                eprintln!("failed to launch native app in foreground: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let mut cmd = Command::new("open");
     // Force launching the exact bundle path selected above, even if another
     // copy with the same bundle identifier is installed or already running.
@@ -107,16 +133,7 @@ fn run_native_ui(args: Vec<String>) {
     cmd.arg(&app_path);
     if native_args.start || native_args.path.is_some() || native_args.pro_unlocked {
         cmd.arg("--args");
-        if native_args.start {
-            cmd.arg("--start");
-        }
-        if let Some(path) = native_args.path {
-            cmd.arg("--path");
-            cmd.arg(path);
-        }
-        if native_args.pro_unlocked {
-            cmd.arg("--pro-unlocked");
-        }
+        append_native_launch_args(&mut cmd, &native_args);
     }
 
     match cmd.status() {
@@ -184,6 +201,7 @@ fn parse_native_args(args: &[String]) -> NativeArgs {
         match arg.as_str() {
             "--start" => parsed.start = true,
             "--pro-unlocked" => parsed.pro_unlocked = true,
+            "--foreground" => parsed.foreground = true,
             "--path" => {
                 let value = iter.next().unwrap_or_else(|| {
                     eprintln!("missing value for --path");
@@ -203,6 +221,31 @@ fn parse_native_args(args: &[String]) -> NativeArgs {
     }
 
     parsed
+}
+
+fn native_app_executable_path(app_path: &Path) -> PathBuf {
+    let executable_name = app_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("DiskscopeNative");
+    app_path
+        .join("Contents")
+        .join("MacOS")
+        .join(executable_name)
+}
+
+fn append_native_launch_args(cmd: &mut Command, native_args: &NativeArgs) {
+    if native_args.start {
+        cmd.arg("--start");
+    }
+    if let Some(path) = &native_args.path {
+        cmd.arg("--path");
+        cmd.arg(path);
+    }
+    if native_args.pro_unlocked {
+        cmd.arg("--pro-unlocked");
+    }
 }
 
 fn discover_native_app_path() -> Option<PathBuf> {
@@ -339,7 +382,7 @@ fn print_top_usage() {
     println!("  diskscope scan [PATH] [options]           Run CLI scanner");
     println!("  diskscope ui [--start] [--path PATH]      Launch egui frontend");
     println!(
-        "  diskscope ui-native [--start] [--path PATH] [--pro-unlocked] Launch native macOS app"
+        "  diskscope ui-native [--start] [--path PATH] [--pro-unlocked] [--foreground] Launch native macOS app"
     );
     println!("  diskscope clean-native                     Remove native macOS build artifacts");
     println!();

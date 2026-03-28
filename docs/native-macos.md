@@ -116,11 +116,13 @@ xcodebuild \
   -derivedDataPath native/macos/DiskscopeNative/build \
   build
 cargo run -p diskscope -- ui-native --path / --start
+cargo run -p diskscope -- ui-native --foreground
 ```
 
 Notes:
 - `diskscope clean-native` removes stale native artifacts (`native/macos/DiskscopeNative/build` and local app copy).
 - `diskscope ui-native` runs deterministic `xcodebuild` (Debug, fixed `-derivedDataPath`) before launch.
+- `diskscope ui-native --foreground` runs `Contents/MacOS/DiskscopeNative` directly and keeps logs attached to the current terminal.
 - launch target is deterministic: `native/macos/DiskscopeNative/build/Build/Products/Debug/DiskscopeNative.app`.
 
 ## Runtime behavior notes
@@ -169,6 +171,17 @@ Run a deterministic clean and relaunch:
 cargo run -p diskscope -- clean-native
 cargo run -p diskscope -- ui-native
 ```
+
+### Dyld error references `DiskscopeNative.debug.dylib`
+
+This usually means a stale Debug artifact was launched. Run:
+
+```bash
+cargo run -p diskscope -- clean-native
+cargo run -p diskscope -- ui-native --foreground
+```
+
+The project now disables Xcode debug-dylib wrapping (`ENABLE_DEBUG_DYLIB=NO`) to avoid this launch-time failure mode.
 
 ### Linker cannot find `-ldiskscope_ffi`
 

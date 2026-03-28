@@ -18,6 +18,7 @@ struct ContentView: View {
             }
         }
         .padding(store.currentScreen == .setup ? 10 : 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .alert(item: $store.upgradePrompt) { prompt in
             if prompt.openAppStore {
                 return Alert(
@@ -72,8 +73,9 @@ struct ContentView: View {
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: setupDriveListHeight)
+                .frame(minHeight: setupDriveListHeight, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             HStack(spacing: 10) {
                 Picker("Profile", selection: $store.profile) {
@@ -98,6 +100,7 @@ struct ContentView: View {
                 .keyboardShortcut(.return, modifiers: [])
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(isPresented: $showingAdvancedSheet) {
             SetupAdvancedSheetView()
                 .environmentObject(store)

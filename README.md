@@ -71,11 +71,13 @@ Builds and launches native macOS frontend app bundle.
 ```bash
 cargo run -p diskscope -- ui-native
 cargo run -p diskscope -- ui-native --path / --start
+cargo run -p diskscope -- ui-native --foreground
 ```
 
 Behavior:
 - default launch opens **Setup** ("What to Scan").
 - `--start --path PATH` opens **Results** immediately and starts scanning.
+- `--foreground` runs app executable in the current terminal (useful for direct stdout/stderr diagnostics).
 - before launch, CLI runs `xcodebuild` to `native/macos/DiskscopeNative/build` (Debug) so the app is always fresh.
 
 If the app bundle is missing, CLI exits non-zero and prints deterministic build steps.
