@@ -759,7 +759,6 @@ private struct ScanCapacityBarView: View {
             let total = max(Double(segments.totalBytes), 1.0)
             let barWidth = geometry.size.width
             let barHeight = geometry.size.height
-            let cornerRadius = barHeight / 2
             let widthForBytes: (UInt64) -> CGFloat = { bytes in
                 barWidth * CGFloat(Double(bytes) / total)
             }
@@ -795,19 +794,23 @@ private struct ScanCapacityBarView: View {
                         let highlightWidth = min(max(barWidth * 0.2, 52), 180)
                         let offset = (barWidth + highlightWidth) * CGFloat(phase) - highlightWidth
 
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0),
-                                Color.white.opacity(0.3),
-                                Color.white.opacity(0)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        .frame(width: highlightWidth, height: barHeight)
-                        .offset(x: offset)
+                        ZStack(alignment: .leading) {
+                            Color.clear
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0),
+                                    Color.white.opacity(0.3),
+                                    Color.white.opacity(0)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: highlightWidth, height: barHeight)
+                            .offset(x: offset)
+                        }
+                        .frame(width: barWidth, height: barHeight, alignment: .leading)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .clipShape(Capsule(style: .continuous))
                     .allowsHitTesting(false)
                 }
 
