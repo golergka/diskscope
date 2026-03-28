@@ -89,6 +89,8 @@ struct TreemapView: NSViewRepresentable {
 }
 
 final class TreemapCanvas: NSView {
+    private let treemapProgressiveFramesEnabled =
+        ProcessInfo.processInfo.environment["DISKSCOPE_TREEMAP_PROGRESSIVE_FRAMES"] == "1"
     private weak var store: NativeScanStore?
     private var rootId: UInt64 = 0
     private var selectedId: UInt64 = 0
@@ -651,6 +653,9 @@ final class TreemapCanvas: NSView {
                 return
             }
             guard self.isLayoutGenerationCurrent(frame.generation) else {
+                return
+            }
+            if !self.treemapProgressiveFramesEnabled && !frame.isFinal {
                 return
             }
 
