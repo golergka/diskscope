@@ -603,7 +603,6 @@ private struct ScanCapacityBarView: View {
             let deferredWidth = widthForBytes(segments.deferredBytes)
             let remainingWidth = widthForBytes(segments.remainingBytes)
             let emptyWidth = widthForBytes(segments.emptyBytes)
-            let usedWidth = widthForBytes(segments.occupiedBytes)
 
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
@@ -625,12 +624,12 @@ private struct ScanCapacityBarView: View {
                 }
                 .clipShape(Capsule(style: .continuous))
 
-                if isRunning && usedWidth > 0 {
+                if isRunning {
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                         let phase = timeline.date.timeIntervalSinceReferenceDate
                             .truncatingRemainder(dividingBy: 1.8) / 1.8
-                        let highlightWidth = min(max(usedWidth * 0.25, 42), 140)
-                        let offset = (usedWidth + highlightWidth) * CGFloat(phase) - highlightWidth
+                        let highlightWidth = min(max(barWidth * 0.2, 52), 180)
+                        let offset = (barWidth + highlightWidth) * CGFloat(phase) - highlightWidth
 
                         LinearGradient(
                             colors: [
@@ -643,12 +642,6 @@ private struct ScanCapacityBarView: View {
                         )
                         .frame(width: highlightWidth, height: barHeight)
                         .offset(x: offset)
-                        .mask {
-                            HStack(spacing: 0) {
-                                Rectangle().frame(width: usedWidth)
-                                Spacer(minLength: 0)
-                            }
-                        }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     .allowsHitTesting(false)
