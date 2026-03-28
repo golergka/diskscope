@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var store: NativeScanStore
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingAdvancedSheet = false
     @State private var showingMonitoringSheet = false
 
@@ -275,6 +276,7 @@ struct ContentView: View {
 
     private var progressBar: some View {
         let segments = store.capacitySegments
+        let darkMode = colorScheme == .dark
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -300,22 +302,22 @@ struct ContentView: View {
                 ScanCapacityLegendItem(
                     title: "Scanned",
                     value: store.scannedSegmentGbLabel,
-                    color: ScanCapacityPalette.scanned
+                    color: ScanCapacityPalette.scanned(darkMode: darkMode)
                 )
                 ScanCapacityLegendItem(
                     title: "Deferred",
                     value: store.deferredSegmentGbLabel,
-                    color: ScanCapacityPalette.deferred
+                    color: ScanCapacityPalette.deferred(darkMode: darkMode)
                 )
                 ScanCapacityLegendItem(
                     title: "Pending",
                     value: store.remainingSegmentGbLabel,
-                    color: ScanCapacityPalette.remaining
+                    color: ScanCapacityPalette.remaining(darkMode: darkMode)
                 )
                 ScanCapacityLegendItem(
                     title: "Empty",
                     value: store.emptySegmentGbLabel,
-                    color: ScanCapacityPalette.empty
+                    color: ScanCapacityPalette.empty(darkMode: darkMode)
                 )
 
                 Button {
@@ -678,29 +680,40 @@ private final class InvisibleDividerSplitView: NSSplitView {
 }
 
 private enum ScanCapacityPalette {
-    static let scanned = Color(nsColor: NSColor.systemBlue)
-    static let deferred = Color(nsColor: NSColor.systemOrange)
-    static let remaining = Color(nsColor: NSColor.systemYellow)
-    static let empty = Color(nsColor: NSColor.tertiaryLabelColor).opacity(0.5)
+    static func scanned(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.scanned, darkMode: darkMode))
+    }
+
+    static func deferred(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.deferred, darkMode: darkMode))
+    }
+
+    static func remaining(darkMode: Bool) -> Color {
+        Color(nsColor: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
+    }
+
+    static func empty(darkMode: Bool) -> Color {
+        Color(nsColor: emptyBase(darkMode: darkMode))
+    }
 
     static var trackGradient: LinearGradient {
         gradient(base: NSColor.controlBackgroundColor)
     }
 
-    static var scannedGradient: LinearGradient {
-        gradient(base: NSColor.systemBlue)
+    static func scannedGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.scanned, darkMode: darkMode))
     }
 
-    static var deferredGradient: LinearGradient {
-        gradient(base: NSColor.systemOrange)
+    static func deferredGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.deferred, darkMode: darkMode))
     }
 
-    static var remainingGradient: LinearGradient {
-        gradient(base: NSColor.systemYellow)
+    static func remainingGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: NativeThemeColorPalette.progressSegmentColor(.remaining, darkMode: darkMode))
     }
 
-    static var emptyGradient: LinearGradient {
-        gradient(base: NSColor.tertiaryLabelColor.withAlphaComponent(0.45))
+    static func emptyGradient(darkMode: Bool) -> LinearGradient {
+        gradient(base: emptyBase(darkMode: darkMode))
     }
 
     static var glossGradient: LinearGradient {
@@ -758,6 +771,12 @@ private enum ScanCapacityPalette {
             endPoint: .bottom
         )
     }
+
+    private static func emptyBase(darkMode: Bool) -> NSColor {
+        darkMode
+            ? NSColor(calibratedWhite: 0.34, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.82, alpha: 1.0)
+    }
 }
 
 private struct ScanCapacityLegendItem: View {
@@ -779,11 +798,13 @@ private struct ScanCapacityLegendItem: View {
 }
 
 private struct ScanCapacityBarView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let segments: NativeCapacitySegments
     let isRunning: Bool
 
     var body: some View {
         GeometryReader { geometry in
+            let darkMode = colorScheme == .dark
             let total = max(Double(segments.totalBytes), 1.0)
             let barWidth = geometry.size.width
             let barHeight = geometry.size.height
@@ -803,16 +824,16 @@ private struct ScanCapacityBarView: View {
 
                 HStack(spacing: 0) {
                     Rectangle()
-                        .fill(ScanCapacityPalette.scannedGradient)
+                        .fill(ScanCapacityPalette.scannedGradient(darkMode: darkMode))
                         .frame(width: scannedWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.deferredGradient)
+                        .fill(ScanCapacityPalette.deferredGradient(darkMode: darkMode))
                         .frame(width: deferredWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.remainingGradient)
+                        .fill(ScanCapacityPalette.remainingGradient(darkMode: darkMode))
                         .frame(width: remainingWidth)
                     Rectangle()
-                        .fill(ScanCapacityPalette.emptyGradient)
+                        .fill(ScanCapacityPalette.emptyGradient(darkMode: darkMode))
                         .frame(width: emptyWidth)
                 }
                 .clipShape(Capsule(style: .continuous))

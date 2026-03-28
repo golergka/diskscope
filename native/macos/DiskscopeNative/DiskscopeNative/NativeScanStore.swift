@@ -24,6 +24,66 @@ private let kChildrenPartial = UInt8(DS_CHILDREN_STATE_PARTIAL)
 private let kChildrenFinal = UInt8(DS_CHILDREN_STATE_FINAL)
 private let kChildrenCollapsed = UInt8(DS_CHILDREN_STATE_COLLAPSED_BY_THRESHOLD)
 
+enum NativeProgressHue: CaseIterable {
+    case scanned
+    case deferred
+    case remaining
+
+    var degrees: CGFloat {
+        switch self {
+        case .scanned:
+            return 212
+        case .deferred:
+            return 28
+        case .remaining:
+            return 52
+        }
+    }
+}
+
+enum NativeThemeColorPalette {
+    // Keep saturation/brightness fixed per mode so treemap labels can stay a single color.
+    private static let lightSaturation: CGFloat = 0.66
+    private static let lightBrightness: CGFloat = 0.90
+    private static let darkSaturation: CGFloat = 0.66
+    private static let darkBrightness: CGFloat = 0.63
+
+    static func hueColor(
+        hueDegrees: CGFloat,
+        darkMode: Bool,
+        alpha: CGFloat = 1.0
+    ) -> NSColor {
+        let normalizedHue = ((hueDegrees.truncatingRemainder(dividingBy: 360)) + 360)
+            .truncatingRemainder(dividingBy: 360) / 360
+        let saturation = darkMode ? darkSaturation : lightSaturation
+        let brightness = darkMode ? darkBrightness : lightBrightness
+        return NSColor(
+            calibratedHue: normalizedHue,
+            saturation: saturation,
+            brightness: brightness,
+            alpha: alpha
+        )
+    }
+
+    static func hashedHueColor(
+        hash: UInt64,
+        darkMode: Bool,
+        alpha: CGFloat = 1.0
+    ) -> NSColor {
+        hueColor(hueDegrees: CGFloat(hash % 360), darkMode: darkMode, alpha: alpha)
+    }
+
+    static func progressSegmentColor(_ hue: NativeProgressHue, darkMode: Bool) -> NSColor {
+        hueColor(hueDegrees: hue.degrees, darkMode: darkMode)
+    }
+
+    static func treemapLabelColor(darkMode: Bool) -> NSColor {
+        darkMode
+            ? NSColor(calibratedWhite: 0.96, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.08, alpha: 1.0)
+    }
+}
+
 enum NativeDiagnostics {
     private static let logger = Logger(subsystem: "com.diskscope.native", category: "runtime")
     private static let enabledFlag = ProcessInfo.processInfo.environment["DISKSCOPE_NATIVE_TRACE"] == "1"
