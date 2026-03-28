@@ -1,7 +1,7 @@
 use crate::events::{Patch, ProgressStats, RealtimeScanRequest, ScanError, ScanEvent, ScanProfile};
 use crate::model::{ChildrenState, NodeId, NodeKind, NodeSnapshot, ScanModel, SizeState};
 use crate::volume::{collapse_threshold_bytes, volume_size_bytes, volume_stats};
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TryRecvError};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -234,6 +234,7 @@ pub fn print_legacy_usage() {
 pub struct ScanHandle {
     cancel_flag: Arc<AtomicBool>,
     join_handle: Option<JoinHandle<()>>,
+    command_tx: Sender<CoordinatorCommand>,
 }
 
 impl ScanHandle {
@@ -241,7 +242,14 @@ impl ScanHandle {
         self.cancel_flag.store(true, AtomicOrdering::Relaxed);
     }
 
+    pub fn enqueue_expand(&self, node_id: NodeId) -> bool {
+        self.command_tx
+            .send(CoordinatorCommand::EnqueueExpand(node_id))
+            .is_ok()
+    }
+
     pub fn join(&mut self) {
+        self.cancel();
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
@@ -273,9 +281,18 @@ struct DirJob {
     path: PathBuf,
     relative_path: PathBuf,
     name: String,
+    kind: DirJobKind,
+}
+
+#[derive(Clone, Copy)]
+enum DirJobKind {
+    Initial,
+    ExpandDeferredRoot,
 }
 
 struct SubtreeResult {
+    root_id: NodeId,
+    parent_id: NodeId,
     nodes: Vec<NodeSnapshot>,
     total_size_bytes: u64,
 }
@@ -293,6 +310,10 @@ enum WorkerMessage {
     Progress(ProgressDelta),
     Subtree(SubtreeResult),
     Error(String),
+}
+
+enum CoordinatorCommand {
+    EnqueueExpand(NodeId),
 }
 
 struct WorkerProgressEmitter {
@@ -371,6 +392,7 @@ pub fn spawn_realtime_scan(
     normalized_request.root = root;
 
     let (event_tx, event_rx) = unbounded::<ScanEvent>();
+    let (command_tx, command_rx) = unbounded::<CoordinatorCommand>();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let thread_cancel = Arc::clone(&cancel_flag);
 
@@ -378,13 +400,14 @@ pub fn spawn_realtime_scan(
         .name("diskscope-scan-coordinator".to_owned())
         .stack_size(COORDINATOR_STACK_SIZE_BYTES)
         .spawn(move || {
-            run_realtime_scan(normalized_request, thread_cancel, event_tx);
+            run_realtime_scan(normalized_request, thread_cancel, event_tx, command_rx);
         })?;
 
     Ok((
         ScanHandle {
             cancel_flag,
             join_handle: Some(join_handle),
+            command_tx,
         },
         event_rx,
     ))
@@ -394,6 +417,7 @@ fn run_realtime_scan(
     request: RealtimeScanRequest,
     cancel_flag: Arc<AtomicBool>,
     event_tx: Sender<ScanEvent>,
+    command_rx: Receiver<CoordinatorCommand>,
 ) {
     let started_at = Instant::now();
     let root_volume_stats = volume_stats(&request.root).ok();
@@ -459,11 +483,13 @@ fn run_realtime_scan(
     let root_id = model.root_id();
     let id_alloc = Arc::new(AtomicU64::new(1));
 
+    let (priority_job_tx, priority_job_rx) = unbounded::<DirJob>();
     let (job_tx, job_rx) = bounded::<DirJob>(queue_limit);
     let (worker_tx, worker_rx) = unbounded::<WorkerMessage>();
 
     let mut workers = Vec::with_capacity(worker_count);
     for worker_idx in 0..worker_count {
+        let worker_priority_jobs = priority_job_rx.clone();
         let worker_jobs = job_rx.clone();
         let worker_events = worker_tx.clone();
         let worker_cancel = Arc::clone(&cancel_flag);
@@ -475,6 +501,7 @@ fn run_realtime_scan(
             .stack_size(WORKER_STACK_SIZE_BYTES)
             .spawn(move || {
                 worker_loop(
+                    worker_priority_jobs,
                     worker_jobs,
                     worker_events,
                     worker_cancel,
@@ -491,6 +518,7 @@ fn run_realtime_scan(
                     message: format!("failed to spawn worker thread: {error}"),
                 }));
                 drop(worker_tx);
+                drop(priority_job_tx);
                 drop(job_tx);
                 for worker in workers {
                     let _ = worker.join();
@@ -512,6 +540,7 @@ fn run_realtime_scan(
     progress.occupied_bytes = root_occupied_bytes;
     progress.target_bytes = root_occupied_bytes;
     let mut active_workers = 0_usize;
+    let mut in_flight_expansions: HashSet<NodeId> = HashSet::new();
 
     let root_entries = match fs::read_dir(&request.root) {
         Ok(entries) => entries,
@@ -526,6 +555,7 @@ fn run_realtime_scan(
     for entry_result in root_entries {
         if cancel_flag.load(AtomicOrdering::Relaxed) {
             let _ = event_tx.send(ScanEvent::Cancelled);
+            drop(priority_job_tx);
             drop(job_tx);
             for worker in workers {
                 let _ = worker.join();
@@ -649,6 +679,7 @@ fn run_realtime_scan(
                     path: path.clone(),
                     relative_path: PathBuf::from(name.clone()),
                     name,
+                    kind: DirJobKind::Initial,
                 };
                 if job_tx.send(job).is_err() {
                     break;
@@ -745,6 +776,7 @@ fn run_realtime_scan(
                 path: path.clone(),
                 relative_path: PathBuf::from(name.clone()),
                 name,
+                kind: DirJobKind::Initial,
             };
             if job_tx.send(job).is_err() {
                 break;
@@ -764,17 +796,102 @@ fn run_realtime_scan(
         }
     }
 
-    drop(job_tx);
-
     let mut last_flush = Instant::now();
-    while pending_subtrees > 0 {
+    let mut completion_emitted = false;
+    loop {
         if cancel_flag.load(AtomicOrdering::Relaxed) {
             let _ = event_tx.send(ScanEvent::Cancelled);
+            drop(priority_job_tx);
+            drop(job_tx);
             for worker in workers {
                 let _ = worker.join();
             }
             return;
         }
+
+        loop {
+            match command_rx.try_recv() {
+                Ok(command) => match command {
+                    CoordinatorCommand::EnqueueExpand(node_id) => {
+                        if enqueue_deferred_expansion_job(
+                            node_id,
+                            &mut model,
+                            &mut pending_patches,
+                            &mut pending_subtrees,
+                            &priority_job_tx,
+                            &mut in_flight_expansions,
+                        ) {
+                            completion_emitted = false;
+                            root_partial_dirty = true;
+                            if pending_patches.len() >= MAX_PENDING_PATCHES {
+                                let batch = std::mem::take(&mut pending_patches);
+                                let _ = event_tx.send(ScanEvent::Batch(batch));
+                            }
+                        }
+                    }
+                },
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
+        if pending_subtrees == 0 {
+            if !completion_emitted {
+                if let Some(root_node) = model.get_mut(root_id) {
+                    root_node.size_bytes = root_size;
+                    root_node.size_state = SizeState::Final;
+                    root_node.children_state = ChildrenState::Final;
+                    root_node.children = root_children.clone();
+                    pending_patches.push(Patch::UpsertNode(root_node.clone()));
+                    if pending_patches.len() >= MAX_PENDING_PATCHES {
+                        let batch = std::mem::take(&mut pending_patches);
+                        let _ = event_tx.send(ScanEvent::Batch(batch));
+                    }
+                }
+
+                progress.queued_jobs = 0;
+                progress.active_workers = active_workers;
+                progress.elapsed_ms = started_at.elapsed().as_millis();
+                let _ = event_tx.send(ScanEvent::Progress(progress.clone()));
+
+                if !pending_patches.is_empty() {
+                    let batch = std::mem::take(&mut pending_patches);
+                    let _ = event_tx.send(ScanEvent::Batch(batch));
+                }
+
+                let _ = event_tx.send(ScanEvent::Completed);
+                completion_emitted = true;
+            }
+
+            match command_rx.recv_timeout(Duration::from_millis(30)) {
+                Ok(command) => match command {
+                    CoordinatorCommand::EnqueueExpand(node_id) => {
+                        if enqueue_deferred_expansion_job(
+                            node_id,
+                            &mut model,
+                            &mut pending_patches,
+                            &mut pending_subtrees,
+                            &priority_job_tx,
+                            &mut in_flight_expansions,
+                        ) {
+                            completion_emitted = false;
+                        }
+                    }
+                },
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    drop(priority_job_tx);
+                    drop(job_tx);
+                    for worker in workers {
+                        let _ = worker.join();
+                    }
+                    return;
+                }
+            }
+            continue;
+        }
+
+        completion_emitted = false;
 
         match worker_rx.recv_timeout(Duration::from_millis(30)) {
             Ok(message) => match message {
@@ -789,14 +906,21 @@ fn run_realtime_scan(
                         progress.directories_seen.saturating_add(delta.directories);
                     progress.files_seen = progress.files_seen.saturating_add(delta.files);
                     progress.bytes_seen = progress.bytes_seen.saturating_add(delta.bytes);
-                    root_partial_size = root_partial_size.max(progress.bytes_seen);
                     root_partial_dirty = true;
                 }
                 WorkerMessage::Subtree(result) => {
                     pending_subtrees = pending_subtrees.saturating_sub(1);
-                    root_size = root_size.saturating_add(result.total_size_bytes);
-                    root_partial_size = root_partial_size.max(root_size);
+                    in_flight_expansions.remove(&result.root_id);
+
+                    let previous_size = model
+                        .get(result.root_id)
+                        .map(|node| node.size_bytes)
+                        .unwrap_or(0);
+                    let size_delta = result.total_size_bytes as i128 - previous_size as i128;
+                    root_size = apply_signed_delta(root_size, size_delta);
+                    root_partial_size = root_size;
                     root_partial_dirty = true;
+
                     for node in result.nodes {
                         model.upsert_node(node.clone());
                         pending_patches.push(Patch::UpsertNode(node));
@@ -805,9 +929,20 @@ fn run_realtime_scan(
                             let _ = event_tx.send(ScanEvent::Batch(batch));
                         }
                     }
+
+                    if size_delta != 0 {
+                        apply_size_delta_to_ancestors(
+                            &mut model,
+                            result.parent_id,
+                            size_delta,
+                            &mut pending_patches,
+                        );
+                    }
                 }
                 WorkerMessage::Error(message) => {
                     let _ = event_tx.send(ScanEvent::Error(ScanError { message }));
+                    drop(priority_job_tx);
+                    drop(job_tx);
                     for worker in workers {
                         let _ = worker.join();
                     }
@@ -815,7 +950,14 @@ fn run_realtime_scan(
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                drop(priority_job_tx);
+                drop(job_tx);
+                for worker in workers {
+                    let _ = worker.join();
+                }
+                return;
+            }
         }
 
         if last_flush.elapsed() >= Duration::from_millis(LIVE_UPDATE_INTERVAL_MS) {
@@ -841,59 +983,168 @@ fn run_realtime_scan(
             last_flush = Instant::now();
         }
     }
+}
 
-    for worker in workers {
-        let _ = worker.join();
+fn enqueue_deferred_expansion_job(
+    node_id: NodeId,
+    model: &mut ScanModel,
+    pending_patches: &mut Vec<Patch>,
+    pending_subtrees: &mut usize,
+    priority_job_tx: &Sender<DirJob>,
+    in_flight_expansions: &mut HashSet<NodeId>,
+) -> bool {
+    if in_flight_expansions.contains(&node_id) {
+        return true;
     }
 
-    if let Some(root_node) = model.get_mut(root_id) {
-        root_node.size_bytes = root_size;
-        root_node.size_state = SizeState::Final;
-        root_node.children_state = ChildrenState::Final;
-        root_node.children = root_children;
-        pending_patches.push(Patch::UpsertNode(root_node.clone()));
-        if pending_patches.len() >= MAX_PENDING_PATCHES {
-            let batch = std::mem::take(&mut pending_patches);
-            let _ = event_tx.send(ScanEvent::Batch(batch));
+    let Some(existing) = model.get(node_id).cloned() else {
+        return false;
+    };
+    if existing.kind != NodeKind::CollapsedDirectory
+        && existing.children_state != ChildrenState::CollapsedByThreshold
+    {
+        return false;
+    }
+    let Some(parent_id) = existing.parent_id else {
+        return false;
+    };
+
+    let Some(path) = model_node_path(model, node_id) else {
+        return false;
+    };
+    let relative_path = match path.strip_prefix(&model.root_path) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => PathBuf::from(existing.name.clone()),
+    };
+
+    if let Some(node) = model.get_mut(node_id) {
+        node.kind = NodeKind::Directory;
+        node.size_state = SizeState::Partial;
+        node.children_state = ChildrenState::Partial;
+        node.children.clear();
+        pending_patches.push(Patch::UpsertNode(node.clone()));
+    }
+
+    let job = DirJob {
+        node_id,
+        parent_id,
+        path,
+        relative_path,
+        name: existing.name,
+        kind: DirJobKind::ExpandDeferredRoot,
+    };
+
+    if priority_job_tx.send(job).is_err() {
+        return false;
+    }
+    *pending_subtrees = pending_subtrees.saturating_add(1);
+    in_flight_expansions.insert(node_id);
+    true
+}
+
+fn model_node_path(model: &ScanModel, node_id: NodeId) -> Option<PathBuf> {
+    let mut segments = Vec::<String>::new();
+    let mut cursor = Some(node_id);
+    while let Some(id) = cursor {
+        let node = model.get(id)?;
+        if id != model.root_id() {
+            segments.push(node.name.clone());
+        }
+        cursor = node.parent_id;
+    }
+
+    let mut path = model.root_path.clone();
+    for segment in segments.iter().rev() {
+        if !segment.is_empty() {
+            path.push(segment);
         }
     }
+    Some(path)
+}
 
-    progress.queued_jobs = 0;
-    progress.active_workers = 0;
-    progress.elapsed_ms = started_at.elapsed().as_millis();
-    let _ = event_tx.send(ScanEvent::Progress(progress));
-
-    if !pending_patches.is_empty() {
-        let _ = event_tx.send(ScanEvent::Batch(pending_patches));
+fn apply_signed_delta(value: u64, delta: i128) -> u64 {
+    if delta >= 0 {
+        value.saturating_add(delta as u64)
+    } else {
+        value.saturating_sub((-delta) as u64)
     }
+}
 
-    let _ = event_tx.send(ScanEvent::Completed);
+fn apply_size_delta_to_ancestors(
+    model: &mut ScanModel,
+    mut ancestor_id: NodeId,
+    size_delta: i128,
+    pending_patches: &mut Vec<Patch>,
+) {
+    loop {
+        let next_parent = match model.get_mut(ancestor_id) {
+            Some(node) => {
+                node.size_bytes = apply_signed_delta(node.size_bytes, size_delta);
+                let parent = node.parent_id;
+                pending_patches.push(Patch::UpsertNode(node.clone()));
+                parent
+            }
+            None => break,
+        };
+
+        let Some(parent_id) = next_parent else {
+            break;
+        };
+        ancestor_id = parent_id;
+    }
 }
 
 fn worker_loop(
+    priority_jobs: Receiver<DirJob>,
     jobs: Receiver<DirJob>,
     tx: Sender<WorkerMessage>,
     cancel_flag: Arc<AtomicBool>,
     id_alloc: Arc<AtomicU64>,
     config: LiveScanConfig,
 ) {
-    while let Ok(job) = jobs.recv() {
+    loop {
         if cancel_flag.load(AtomicOrdering::Relaxed) {
             break;
         }
 
+        let job = match priority_jobs.try_recv() {
+            Ok(job) => job,
+            Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty) => {
+                match jobs.recv_timeout(Duration::from_millis(30)) {
+                    Ok(job) => job,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        if matches!(
+                            priority_jobs.try_recv(),
+                            Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty)
+                        ) {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+        };
+
         let _ = tx.send(WorkerMessage::JobStarted);
         let mut emitter = WorkerProgressEmitter::new(tx.clone());
+        let mut job_config = config.clone();
+        if matches!(job.kind, DirJobKind::ExpandDeferredRoot) {
+            // Deferred expansion intentionally rescans an already-seen subtree.
+            // Use a fresh seen-set so children are not filtered out as duplicates.
+            job_config.seen_entries = Arc::new(SeenEntries::default());
+        }
         let result = scan_directory_subtree(
             &job.path,
             &job.relative_path,
             job.node_id,
             job.parent_id,
             &job.name,
-            &config,
+            &job_config,
             &id_alloc,
             &cancel_flag,
             &mut emitter,
+            !matches!(job.kind, DirJobKind::ExpandDeferredRoot),
         );
         emitter.flush();
         let _ = tx.send(WorkerMessage::JobFinished);
@@ -924,6 +1175,7 @@ fn scan_directory_subtree(
     id_alloc: &AtomicU64,
     cancel_flag: &AtomicBool,
     progress: &mut WorkerProgressEmitter,
+    collapse_current_node: bool,
 ) -> io::Result<SubtreeResult> {
     if cancel_flag.load(AtomicOrdering::Relaxed) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "scan cancelled"));
@@ -954,6 +1206,8 @@ fn scan_directory_subtree(
                 children: Vec::new(),
             };
             return Ok(SubtreeResult {
+                root_id: node_id,
+                parent_id,
                 nodes: vec![node],
                 total_size_bytes: 0,
             });
@@ -1033,6 +1287,7 @@ fn scan_directory_subtree(
                 id_alloc,
                 cancel_flag,
                 progress,
+                true,
             )?;
 
             total_size = total_size.saturating_add(child_result.total_size_bytes);
@@ -1107,6 +1362,7 @@ fn scan_directory_subtree(
                     id_alloc,
                     cancel_flag,
                     progress,
+                    true,
                 )?;
                 total_size = total_size.saturating_add(child_result.total_size_bytes);
                 child_ids.push(child_id);
@@ -1143,7 +1399,8 @@ fn scan_directory_subtree(
         }
     }
 
-    let should_collapse = node_id != 0 && total_size < config.threshold_bytes;
+    let should_collapse =
+        collapse_current_node && node_id != 0 && total_size < config.threshold_bytes;
     if should_collapse {
         // TODO(diskscope): Expand collapsed node on click without rebuilding full scan state.
         let collapsed_node = NodeSnapshot {
@@ -1160,6 +1417,8 @@ fn scan_directory_subtree(
             children: Vec::new(),
         };
         return Ok(SubtreeResult {
+            root_id: node_id,
+            parent_id,
             nodes: vec![collapsed_node],
             total_size_bytes: total_size,
         });
@@ -1184,6 +1443,8 @@ fn scan_directory_subtree(
     nodes.extend(child_nodes);
 
     Ok(SubtreeResult {
+        root_id: node_id,
+        parent_id,
         nodes,
         total_size_bytes: total_size,
     })
@@ -2253,15 +2514,17 @@ fn print_usage() {
 mod tests {
     use super::{
         build_live_ignore_matcher, parse_size, preview_worker_count, scan_directory_subtree,
-        write_binary_snapshot, ChildrenState, Config, DirNode, ErrorSample, IgnoreMatcher,
-        LiveScanConfig, NodeKind, ScanProfile, ScanResult, SeenEntries, Stats,
+        spawn_realtime_scan, write_binary_snapshot, ChildrenState, Config, DirNode, ErrorSample,
+        IgnoreMatcher, LiveScanConfig, NodeKind, RealtimeScanRequest, ScanEvent, ScanProfile,
+        ScanResult, SeenEntries, Stats,
     };
     use crossbeam_channel::unbounded;
+    use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parse_size_plain_bytes() {
@@ -2432,6 +2695,7 @@ mod tests {
             &id_alloc,
             &cancel,
             &mut progress,
+            true,
         )
         .unwrap();
 
@@ -2439,6 +2703,53 @@ mod tests {
         let node = &result.nodes[0];
         assert_eq!(node.kind, NodeKind::CollapsedDirectory);
         assert_eq!(node.children_state, ChildrenState::CollapsedByThreshold);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn small_directory_does_not_collapse_when_collapse_is_disabled() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("diskscope-small-expand-{stamp}"));
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("tiny.txt"), b"hello").unwrap();
+
+        let config = LiveScanConfig {
+            include_hidden: true,
+            follow_symlinks: false,
+            one_filesystem: false,
+            threshold_bytes: 1024,
+            root_dev: None,
+            ignore_matcher: Arc::new(build_live_ignore_matcher(&[]).unwrap()),
+            seen_entries: Arc::new(SeenEntries::default()),
+        };
+        let id_alloc = AtomicU64::new(2);
+        let cancel = AtomicBool::new(false);
+        let (tx, _rx) = unbounded();
+        let mut progress = super::WorkerProgressEmitter::new(tx);
+
+        let result = scan_directory_subtree(
+            &child,
+            Path::new("child"),
+            1,
+            0,
+            "child",
+            &config,
+            &id_alloc,
+            &cancel,
+            &mut progress,
+            false,
+        )
+        .unwrap();
+
+        assert!(!result.nodes.is_empty());
+        let node = &result.nodes[0];
+        assert_eq!(node.kind, NodeKind::Directory);
+        assert_eq!(node.children_state, ChildrenState::Final);
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2479,6 +2790,7 @@ mod tests {
             &id_alloc,
             &cancel,
             &mut progress,
+            true,
         )
         .unwrap();
 
@@ -2487,6 +2799,118 @@ mod tests {
         assert_eq!(root_node.kind, NodeKind::Directory);
         assert_eq!(root_node.children_state, ChildrenState::Final);
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deferred_expansion_enqueues_after_completion_and_reuses_session() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("diskscope-deferred-expand-{stamp}"));
+        let collapsed_dir = root.join("deferred");
+        let nested = collapsed_dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("tiny.txt"), b"hello world").unwrap();
+        std::fs::write(root.join("root.bin"), vec![0_u8; 16]).unwrap();
+
+        let mut request = RealtimeScanRequest::with_root(root.clone());
+        request.include_hidden = true;
+        request.follow_symlinks = false;
+        request.one_filesystem = false;
+        request.tuning.profile = ScanProfile::Balanced;
+        request.tuning.worker_override = Some(1);
+        request.tuning.queue_limit = 8;
+        request.tuning.threshold_override = Some(1024);
+
+        let (mut handle, rx) = spawn_realtime_scan(request).unwrap();
+        let mut model = HashMap::<u64, super::NodeSnapshot>::new();
+        let mut completion_count = 0_u8;
+        let mut deferred_id: Option<u64> = None;
+
+        let first_deadline = Instant::now() + Duration::from_secs(5);
+        while completion_count < 1 && Instant::now() < first_deadline {
+            let event = rx
+                .recv_timeout(Duration::from_millis(200))
+                .expect("timed out waiting for first completion");
+            match event {
+                ScanEvent::Batch(patches) => {
+                    for patch in patches {
+                        let super::Patch::UpsertNode(node) = patch;
+                        if node.name == "deferred"
+                            && node.children_state == ChildrenState::CollapsedByThreshold
+                        {
+                            deferred_id = Some(node.id);
+                        }
+                        model.insert(node.id, node);
+                    }
+                }
+                ScanEvent::Completed => completion_count = completion_count.saturating_add(1),
+                ScanEvent::Error(error) => panic!("scan failed: {}", error.message),
+                _ => {}
+            }
+        }
+
+        let deferred_id = deferred_id.expect("did not observe collapsed deferred node");
+        let deferred_before = model
+            .get(&deferred_id)
+            .expect("missing deferred node before expansion");
+        assert_eq!(deferred_before.kind, NodeKind::CollapsedDirectory);
+        assert_eq!(
+            deferred_before.children_state,
+            ChildrenState::CollapsedByThreshold
+        );
+        assert!(handle.enqueue_expand(deferred_id));
+
+        let second_deadline = Instant::now() + Duration::from_secs(5);
+        while completion_count < 2 && Instant::now() < second_deadline {
+            let event = rx
+                .recv_timeout(Duration::from_millis(200))
+                .expect("timed out waiting for second completion");
+            match event {
+                ScanEvent::Batch(patches) => {
+                    for patch in patches {
+                        let super::Patch::UpsertNode(node) = patch;
+                        model.insert(node.id, node);
+                    }
+                }
+                ScanEvent::Completed => completion_count = completion_count.saturating_add(1),
+                ScanEvent::Error(error) => panic!("scan failed: {}", error.message),
+                _ => {}
+            }
+        }
+
+        assert_eq!(completion_count, 2, "expected second completion after enqueue");
+        let deferred_after = model
+            .get(&deferred_id)
+            .expect("missing deferred node after expansion");
+        assert_eq!(deferred_after.kind, NodeKind::Directory);
+        assert_ne!(
+            deferred_after.children_state,
+            ChildrenState::CollapsedByThreshold
+        );
+        assert!(
+            !deferred_after.children.is_empty(),
+            "expanded deferred node has no children"
+        );
+        let descendant_exists = model.values().any(|node| node.parent_id == Some(deferred_id));
+        assert!(descendant_exists, "expanded deferred node has no emitted descendants");
+
+        let root_node = model.get(&0).expect("missing root node");
+        let child_sum: u64 = root_node
+            .children
+            .iter()
+            .filter_map(|child_id| model.get(child_id))
+            .map(|child| child.size_bytes)
+            .sum();
+        assert_eq!(
+            root_node.size_bytes, child_sum,
+            "root size should match direct child totals after expansion"
+        );
+
+        handle.cancel();
+        handle.join();
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -423,6 +423,10 @@ struct ContentView: View {
             store.revealNodeParentInFinder(nodeId: nodeId)
         case .copyPath:
             store.copyNodePath(nodeId: nodeId)
+        case .expandDeferred:
+            store.enqueueDeferredExpansion(nodeId: nodeId)
+        case .retryScan:
+            store.retryNode(nodeId: nodeId)
         case .deleteToTrash:
             confirmDelete(nodeId: nodeId)
         }
@@ -1077,7 +1081,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             guard row >= 0,
                   let item = outlineView.item(atRow: row),
                   let nodeId = nodeId(from: item),
-                  parent.store.node(nodeId) != nil else {
+                  let node = parent.store.node(nodeId) else {
                 return nil
             }
 
@@ -1100,13 +1104,32 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 action: .copyPath,
                 enabled: true
             )
+            let expandDeferredItem = contextMenuItem(
+                title: "Expand Deferred",
+                action: .expandDeferred,
+                enabled: node.childrenState == .collapsedByThreshold
+            )
+            let retryItem = contextMenuItem(
+                title: "Retry",
+                action: .retryScan,
+                enabled: node.errorFlag
+            )
             let deleteItem = contextMenuItem(
                 title: "Delete…",
                 action: .deleteToTrash,
                 enabled: parent.store.canDeleteNode(nodeId: nodeId)
             )
 
-            menu.items = [showItem, revealParentItem, copyPathItem, NSMenuItem.separator(), deleteItem]
+            menu.items = [
+                showItem,
+                revealParentItem,
+                copyPathItem,
+                NSMenuItem.separator(),
+                expandDeferredItem,
+                retryItem,
+                NSMenuItem.separator(),
+                deleteItem
+            ]
             return menu
         }
 
@@ -1269,13 +1292,15 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let identifier = NSUserInterfaceItemIdentifier("HierarchySizeCell")
             let cell: NSTableCellView
             let label: NSTextField
-            let deferredButton: HierarchyStatusButton
-            let errorButton: HierarchyStatusButton
+            let statusLane: NSView
+            let deferredIconView: NSImageView
+            let errorIconView: NSImageView
             if let reused = outlineView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
                 cell = reused
                 label = reused.textField ?? NSTextField(labelWithString: "")
-                deferredButton = (reused.viewWithTag(1001) as? HierarchyStatusButton) ?? HierarchyStatusButton()
-                errorButton = (reused.viewWithTag(1002) as? HierarchyStatusButton) ?? HierarchyStatusButton()
+                deferredIconView = (reused.viewWithTag(1001) as? NSImageView) ?? NSImageView(frame: .zero)
+                errorIconView = (reused.viewWithTag(1002) as? NSImageView) ?? NSImageView(frame: .zero)
+                statusLane = deferredIconView.superview ?? NSView(frame: .zero)
             } else {
                 cell = NSTableCellView(frame: .zero)
                 cell.identifier = identifier
@@ -1290,34 +1315,24 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 let statusLane = NSView(frame: .zero)
                 statusLane.translatesAutoresizingMaskIntoConstraints = false
 
-                let deferredButton = HierarchyStatusButton(frame: .zero)
-                deferredButton.translatesAutoresizingMaskIntoConstraints = false
-                deferredButton.tag = 1001
-                deferredButton.isBordered = false
-                deferredButton.imagePosition = .imageOnly
-                deferredButton.bezelStyle = .regularSquare
-                deferredButton.imageScaling = .scaleProportionallyDown
-                deferredButton.contentTintColor = .systemOrange
-                deferredButton.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
-                deferredButton.target = self
-                deferredButton.action = #selector(handleDeferredStatusButton(_:))
+                let deferredIconView = NSImageView(frame: .zero)
+                deferredIconView.translatesAutoresizingMaskIntoConstraints = false
+                deferredIconView.tag = 1001
+                deferredIconView.imageScaling = .scaleProportionallyDown
+                deferredIconView.contentTintColor = .systemOrange
+                deferredIconView.image = statusIcon(key: "status.deferred", symbol: "clock.fill")
 
-                let errorButton = HierarchyStatusButton(frame: .zero)
-                errorButton.translatesAutoresizingMaskIntoConstraints = false
-                errorButton.tag = 1002
-                errorButton.isBordered = false
-                errorButton.imagePosition = .imageOnly
-                errorButton.bezelStyle = .regularSquare
-                errorButton.imageScaling = .scaleProportionallyDown
-                errorButton.contentTintColor = .systemRed
-                errorButton.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
-                errorButton.target = self
-                errorButton.action = #selector(handleErrorStatusButton(_:))
+                let errorIconView = NSImageView(frame: .zero)
+                errorIconView.translatesAutoresizingMaskIntoConstraints = false
+                errorIconView.tag = 1002
+                errorIconView.imageScaling = .scaleProportionallyDown
+                errorIconView.contentTintColor = .systemRed
+                errorIconView.image = statusIcon(key: "status.error", symbol: "exclamationmark.triangle.fill")
 
                 label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-                statusLane.addSubview(deferredButton)
-                statusLane.addSubview(errorButton)
+                statusLane.addSubview(deferredIconView)
+                statusLane.addSubview(errorIconView)
                 cell.addSubview(label)
                 cell.addSubview(statusLane)
                 cell.textField = label
@@ -1332,68 +1347,65 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                     statusLane.widthAnchor.constraint(equalToConstant: hierarchyStatusLaneWidth),
                     statusLane.heightAnchor.constraint(greaterThanOrEqualToConstant: hierarchyStatusIconWidth),
 
-                    deferredButton.leadingAnchor.constraint(equalTo: statusLane.leadingAnchor),
-                    deferredButton.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
-                    deferredButton.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
-                    deferredButton.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    deferredIconView.leadingAnchor.constraint(equalTo: statusLane.leadingAnchor),
+                    deferredIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    deferredIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    deferredIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
 
-                    errorButton.trailingAnchor.constraint(equalTo: statusLane.trailingAnchor),
-                    errorButton.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
-                    errorButton.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
-                    errorButton.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    errorIconView.trailingAnchor.constraint(equalTo: statusLane.trailingAnchor),
+                    errorIconView.centerYAnchor.constraint(equalTo: statusLane.centerYAnchor),
+                    errorIconView.widthAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
+                    errorIconView.heightAnchor.constraint(equalToConstant: hierarchyStatusIconWidth),
 
-                    deferredButton.trailingAnchor.constraint(
-                        equalTo: errorButton.leadingAnchor,
+                    deferredIconView.trailingAnchor.constraint(
+                        equalTo: errorIconView.leadingAnchor,
                         constant: -hierarchyStatusIconSpacing
                     )
                 ])
 
                 label.stringValue = parent.store.nodeSizeLabel(node)
-                configureSizeStatusButtons(
+                configureSizeStatusViews(
                     node: node,
-                    deferredButton: deferredButton,
-                    errorButton: errorButton
+                    statusLane: statusLane,
+                    deferredIconView: deferredIconView,
+                    errorIconView: errorIconView
                 )
                 return cell
             }
 
             label.stringValue = parent.store.nodeSizeLabel(node)
             label.textColor = .secondaryLabelColor
-            configureSizeStatusButtons(
+            configureSizeStatusViews(
                 node: node,
-                deferredButton: deferredButton,
-                errorButton: errorButton
+                statusLane: statusLane,
+                deferredIconView: deferredIconView,
+                errorIconView: errorIconView
             )
             return cell
         }
 
-        private func configureSizeStatusButtons(
+        private func configureSizeStatusViews(
             node: NativeNode,
-            deferredButton: HierarchyStatusButton,
-            errorButton: HierarchyStatusButton
+            statusLane: NSView,
+            deferredIconView: NSImageView,
+            errorIconView: NSImageView
         ) {
             let showsDeferred = node.childrenState == .collapsedByThreshold
-            deferredButton.nodeId = node.id
-            deferredButton.alphaValue = showsDeferred ? 1 : 0
-            deferredButton.isEnabled = showsDeferred
-            deferredButton.toolTip = showsDeferred
-                ? deferredTooltip(nodeId: node.id)
-                : nil
+            deferredIconView.isHidden = !showsDeferred
 
             let showsError = node.errorFlag
-            errorButton.nodeId = node.id
-            errorButton.alphaValue = showsError ? 1 : 0
-            errorButton.isEnabled = showsError
-            errorButton.toolTip = showsError
-                ? errorTooltip(nodeId: node.id)
-                : nil
+            errorIconView.isHidden = !showsError
+
+            let tooltip = statusTooltip(nodeId: node.id, showsDeferred: showsDeferred, showsError: showsError)
+            statusLane.toolTip = tooltip
+            deferredIconView.toolTip = tooltip
+            errorIconView.toolTip = tooltip
         }
 
         private func deferredTooltip(nodeId: UInt64) -> String {
             let nodePath = parent.store.path(for: nodeId)
             return """
             Deferred: subtree details were collapsed by scan threshold.
-            Click to expand by scanning just this subtree.
             \(nodePath)
             """
         }
@@ -1403,19 +1415,21 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             let description = parent.store.nodeErrorDescription(nodeId: nodeId)
             return """
             Error: \(description)
-            Click to retry the current scan.
             \(nodePath)
             """
         }
 
-        @objc
-        private func handleDeferredStatusButton(_ sender: HierarchyStatusButton) {
-            parent.store.expandDeferredSubtree(nodeId: sender.nodeId)
-        }
-
-        @objc
-        private func handleErrorStatusButton(_ sender: HierarchyStatusButton) {
-            parent.store.retryNode(nodeId: sender.nodeId)
+        private func statusTooltip(nodeId: UInt64, showsDeferred: Bool, showsError: Bool) -> String? {
+            if showsDeferred && showsError {
+                return "\(deferredTooltip(nodeId: nodeId))\n\n\(errorTooltip(nodeId: nodeId))"
+            }
+            if showsDeferred {
+                return deferredTooltip(nodeId: nodeId)
+            }
+            if showsError {
+                return errorTooltip(nodeId: nodeId)
+            }
+            return nil
         }
 
         private func statusIcon(key: String, symbol: String) -> NSImage {
@@ -1523,10 +1537,6 @@ private let hierarchyStatusIconWidth: CGFloat = 12
 private let hierarchyStatusIconSpacing: CGFloat = 4
 private let hierarchyStatusLaneWidth: CGFloat =
     (hierarchyStatusIconWidth * 2) + hierarchyStatusIconSpacing
-
-private final class HierarchyStatusButton: NSButton {
-    var nodeId: UInt64 = 0
-}
 
 private final class HierarchyOutlineNativeView: NSOutlineView {
     var contextMenuProvider: ((Int) -> NSMenu?)?

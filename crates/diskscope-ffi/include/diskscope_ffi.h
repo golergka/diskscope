@@ -105,6 +105,7 @@ typedef void *DsSessionHandleRef;
 uint32_t ds_ffi_abi_version(void);
 DsSessionHandle *ds_scan_start(const DsScanRequest *request, DsScanEventCallback callback, void *user_data);
 void ds_scan_cancel(DsSessionHandle *handle);
+uint8_t ds_scan_enqueue_expand(DsSessionHandle *handle, uint64_t node_id);
 void ds_scan_join(DsSessionHandle *handle);
 void ds_scan_free(DsSessionHandle *handle);
 DsProCapabilities ds_pro_capabilities(void);
@@ -119,6 +120,10 @@ static inline DsSessionHandleRef ds_scan_start_ref(
 
 static inline void ds_scan_cancel_ref(DsSessionHandleRef handle) {
     ds_scan_cancel((DsSessionHandle *)handle);
+}
+
+static inline uint8_t ds_scan_enqueue_expand_ref(DsSessionHandleRef handle, uint64_t node_id) {
+    return ds_scan_enqueue_expand((DsSessionHandle *)handle, node_id);
 }
 
 static inline void ds_scan_join_ref(DsSessionHandleRef handle) {
