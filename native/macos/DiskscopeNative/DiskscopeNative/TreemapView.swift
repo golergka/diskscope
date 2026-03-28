@@ -198,7 +198,7 @@ final class TreemapCanvas: NSView {
             drawGlossOverlay(in: item.rect, node: node, depth: item.depth, darkMode: darkMode)
 
             if item.rect.width > 70 && item.rect.height > 24 {
-                let textColor = textColor(for: fill, darkMode: darkMode)
+                let textColor = NativeThemeColorPalette.treemapLabelColor(darkMode: darkMode)
                 let attrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: textColor,
                     .font: NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -976,54 +976,30 @@ final class TreemapCanvas: NSView {
         CGFloat(value) / 2.0
     }
 
-    private func color(for node: NativeNode, depth: Int, darkMode: Bool) -> NSColor {
-        let palette: [NSColor] = [
-            .systemBlue,
-            .systemTeal,
-            .systemCyan,
-            .systemMint,
-            .systemGreen,
-            .systemYellow,
-            .systemOrange,
-            .systemRed,
-            .systemPink,
-            .systemPurple,
-            .systemIndigo
-        ]
-
+    private func color(for node: NativeNode, depth _: Int, darkMode: Bool) -> NSColor {
         switch node.kind {
         case .file:
             let ext = fileExtension(for: node.name)
-            let base = palette[Int(stableHash(ext) % UInt64(palette.count))]
-            let softened = darkMode
-                ? (base.blended(withFraction: 0.15, of: NSColor.white) ?? base)
-                : (base.blended(withFraction: 0.14, of: NSColor.black) ?? base)
-            return softened.withAlphaComponent(0.96)
+            return NativeThemeColorPalette.hashedHueColor(
+                hash: stableHash(ext),
+                darkMode: darkMode,
+                alpha: 0.96
+            )
 
         case .directory:
-            let neutral = darkMode
-                ? NSColor(calibratedWhite: min(0.42, 0.25 + CGFloat(depth) * 0.02), alpha: 1.0)
-                : NSColor(calibratedWhite: max(0.72, 0.92 - CGFloat(depth) * 0.02), alpha: 1.0)
-            let tint = palette[Int(stableHash(node.name) % UInt64(palette.count))]
-            let mixed = neutral.blended(withFraction: darkMode ? 0.18 : 0.14, of: tint) ?? neutral
-            return mixed.withAlphaComponent(0.95)
+            return NativeThemeColorPalette.hashedHueColor(
+                hash: stableHash(node.name),
+                darkMode: darkMode,
+                alpha: 0.95
+            )
 
         case .collapsedDirectory:
-            let collapsedBase = NSColor.systemOrange
-            let mixed = darkMode
-                ? (collapsedBase.blended(withFraction: 0.28, of: NSColor.black) ?? collapsedBase)
-                : (collapsedBase.blended(withFraction: 0.20, of: NSColor.white) ?? collapsedBase)
-            return mixed.withAlphaComponent(0.96)
+            return NativeThemeColorPalette.hashedHueColor(
+                hash: stableHash("_collapsed_\(node.name)"),
+                darkMode: darkMode,
+                alpha: 0.96
+            )
         }
-    }
-
-    private func textColor(for fill: NSColor, darkMode: Bool) -> NSColor {
-        let rgb = fill.usingColorSpace(.deviceRGB) ?? fill
-        let luma = (0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent) * 255
-        if darkMode {
-            return luma > 148 ? NSColor(calibratedWhite: 0.08, alpha: 1) : NSColor(calibratedWhite: 0.95, alpha: 1)
-        }
-        return luma > 155 ? NSColor(calibratedWhite: 0.10, alpha: 1) : NSColor(calibratedWhite: 0.98, alpha: 1)
     }
 
     private func fileExtension(for name: String) -> String {
