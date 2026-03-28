@@ -7,18 +7,6 @@ private struct TreemapRect {
     let depth: Int
 }
 
-private struct EdgeKey: Hashable {
-    let axis: UInt8 // 0 = horizontal, 1 = vertical
-    let major: Int32
-    let start: Int32
-    let end: Int32
-}
-
-private struct EdgeSegment {
-    let from: CGPoint
-    let to: CGPoint
-}
-
 private struct LayoutNodeSnapshot {
     let id: UInt64
     let name: String
@@ -96,9 +84,6 @@ final class TreemapCanvas: NSView {
     private var exploredFraction: Double = 0
     private var exploredBounds: CGRect = .zero
     private var rects: [TreemapRect] = []
-    private var sharedBorderSegments: [EdgeSegment] = []
-    private var edgeKeysByNode: [UInt64: [EdgeKey]] = [:]
-    private var exploredEdgeKeys: [EdgeKey] = []
 
     private var layoutScheduled = false
     private var layoutDirty = false
@@ -210,7 +195,7 @@ final class TreemapCanvas: NSView {
             }
         }
 
-        drawSharedBorders(darkMode: darkMode)
+        drawSelectedInsetBorder(darkMode: darkMode)
         recordDrawSample(startedAt: drawStartedAt)
     }
 
@@ -653,6 +638,9 @@ final class TreemapCanvas: NSView {
             guard self.isLayoutGenerationCurrent(frame.generation) else {
                 return
             }
+            if !frame.isFinal {
+                return
+            }
 
             // Progressive recompute can transiently emit empty snapshots while patches are still in flight.
             // Keep the last committed frame to avoid visual blank flashes.
@@ -678,7 +666,6 @@ final class TreemapCanvas: NSView {
             self.exploredBounds = frame.exploredBounds
             self.lastCommittedRootId = frame.rootId
             self.lastCommittedModelVersion = frame.modelVersion
-            self.rebuildSharedBorders()
             if frame.isFinal {
                 self.layoutInFlight = false
             }
@@ -732,9 +719,6 @@ final class TreemapCanvas: NSView {
 
     private func clearLayout(exploredBounds: CGRect = .zero) {
         rects = []
-        sharedBorderSegments = []
-        edgeKeysByNode = [:]
-        exploredEdgeKeys = []
         self.exploredBounds = exploredBounds
         layoutInFlight = false
         needsDisplay = true
@@ -875,105 +859,30 @@ final class TreemapCanvas: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func rebuildSharedBorders() {
-        edgeKeysByNode.removeAll(keepingCapacity: true)
-        exploredEdgeKeys = edgeKeys(for: exploredBounds)
-
-        var unique = Set<EdgeKey>()
-        unique.formUnion(exploredEdgeKeys)
-
-        for item in rects {
-            let keys = edgeKeys(for: item.rect)
-            edgeKeysByNode[item.nodeId] = keys
-            unique.formUnion(keys)
-        }
-
-        sharedBorderSegments = unique.map(edgeSegment(from:))
-    }
-
-    private func drawSharedBorders(darkMode: Bool) {
-        guard !sharedBorderSegments.isEmpty else {
-            return
-        }
-
-        let normalBorderColor = darkMode
-            ? NSColor.separatorColor.withAlphaComponent(0.55)
-            : NSColor.separatorColor.withAlphaComponent(0.42)
-        drawBorderSegments(sharedBorderSegments, color: normalBorderColor, lineWidth: 1.0)
-
-        var selectedKeys = Set<EdgeKey>()
+    private func drawSelectedInsetBorder(darkMode _: Bool) {
+        let selectedRect: CGRect?
         if selectedId == rootId {
-            selectedKeys.formUnion(exploredEdgeKeys)
-        }
-        if let keys = edgeKeysByNode[selectedId] {
-            selectedKeys.formUnion(keys)
+            selectedRect = exploredBounds
+        } else {
+            selectedRect = rects.first(where: { $0.nodeId == selectedId })?.rect
         }
 
-        if !selectedKeys.isEmpty {
-            let selectedSegments = selectedKeys.map(edgeSegment(from:))
-            drawBorderSegments(
-                selectedSegments,
-                color: NSColor.controlAccentColor.withAlphaComponent(0.96),
-                lineWidth: 2.0
-            )
-        }
-    }
-
-    private func drawBorderSegments(_ segments: [EdgeSegment], color: NSColor, lineWidth: CGFloat) {
-        guard !segments.isEmpty else {
+        guard var rect = selectedRect,
+              rect.width > 2.0,
+              rect.height > 2.0 else {
             return
         }
-        let path = NSBezierPath()
-        path.lineCapStyle = .butt
-        path.lineJoinStyle = .miter
-        path.lineWidth = lineWidth
-        for segment in segments {
-            path.move(to: segment.from)
-            path.line(to: segment.to)
-        }
-        color.setStroke()
-        path.stroke()
-    }
 
-    private func edgeKeys(for rect: CGRect) -> [EdgeKey] {
-        let minX = quantize(rect.minX)
-        let maxX = quantize(rect.maxX)
-        let minY = quantize(rect.minY)
-        let maxY = quantize(rect.maxY)
-        if minX >= maxX || minY >= maxY {
-            return []
+        let lineWidth: CGFloat = 2.0
+        rect = rect.insetBy(dx: lineWidth * 0.5, dy: lineWidth * 0.5)
+        guard rect.width > 0.0, rect.height > 0.0 else {
+            return
         }
 
-        return [
-            EdgeKey(axis: 0, major: minY, start: minX, end: maxX),
-            EdgeKey(axis: 0, major: maxY, start: minX, end: maxX),
-            EdgeKey(axis: 1, major: minX, start: minY, end: maxY),
-            EdgeKey(axis: 1, major: maxX, start: minY, end: maxY)
-        ]
-    }
-
-    private func edgeSegment(from key: EdgeKey) -> EdgeSegment {
-        if key.axis == 0 {
-            let y = dequantize(key.major)
-            return EdgeSegment(
-                from: CGPoint(x: dequantize(key.start), y: y),
-                to: CGPoint(x: dequantize(key.end), y: y)
-            )
-        }
-
-        let x = dequantize(key.major)
-        return EdgeSegment(
-            from: CGPoint(x: x, y: dequantize(key.start)),
-            to: CGPoint(x: x, y: dequantize(key.end))
-        )
-    }
-
-    private func quantize(_ value: CGFloat) -> Int32 {
-        Int32((value * 2.0).rounded())
-    }
-
-    private func dequantize(_ value: Int32) -> CGFloat {
-        CGFloat(value) / 2.0
+        let borderPath = NSBezierPath(rect: rect)
+        borderPath.lineWidth = lineWidth
+        NSColor.labelColor.withAlphaComponent(0.72).setStroke()
+        borderPath.stroke()
     }
 
     private func color(for node: NativeNode, depth _: Int, darkMode: Bool) -> NSColor {

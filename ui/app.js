@@ -436,6 +436,7 @@ function renderTreemap() {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "treemap-cell";
+    cell.dataset.nodeId = String(rect.nodeId);
     cell.style.left = `${rect.x}px`;
     cell.style.top = `${rect.y}px`;
     cell.style.width = `${rect.width}px`;
@@ -458,11 +459,13 @@ function renderTreemap() {
 
     cell.addEventListener("mouseenter", () => {
       state.selectedNodeId = rect.nodeId;
+      updateSelectedTreemapCell();
       renderSelectionMetrics();
     });
 
     cell.addEventListener("click", () => {
       state.selectedNodeId = rect.nodeId;
+      updateSelectedTreemapCell();
       renderSelectionMetrics();
 
       if (dataset.childCountOf(rect.nodeId) > 0) {
@@ -474,6 +477,16 @@ function renderTreemap() {
 
     treemapElement.appendChild(cell);
     requestAnimationFrame(() => cell.classList.add("visible"));
+  });
+
+  updateSelectedTreemapCell();
+}
+
+function updateSelectedTreemapCell() {
+  const selectedNode = String(state.selectedNodeId);
+  const cells = treemapElement.querySelectorAll(".treemap-cell");
+  cells.forEach((cell) => {
+    cell.classList.toggle("selected", cell.dataset.nodeId === selectedNode);
   });
 }
 

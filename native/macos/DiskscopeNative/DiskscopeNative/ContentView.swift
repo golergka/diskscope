@@ -485,6 +485,7 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
             leadingMinWidth: leadingMinWidth,
             leadingIdealWidth: leadingIdealWidth,
             leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth,
             dividerHitWidth: dividerHitWidth
         )
         return view
@@ -502,6 +503,7 @@ private struct InvisibleDividerResultsSplitView<Leading: View, Trailing: View>: 
             leadingMinWidth: leadingMinWidth,
             leadingIdealWidth: leadingIdealWidth,
             leadingMaxWidth: leadingMaxWidth,
+            trailingMinWidth: trailingMinWidth,
             dividerHitWidth: dividerHitWidth
         )
     }
@@ -576,6 +578,7 @@ private final class InvisibleDividerResultsSplitContainer: NSView {
     private var leadingMinWidth: CGFloat = 320
     private var leadingIdealWidth: CGFloat = 380
     private var leadingMaxWidth: CGFloat = 480
+    private var trailingMinWidth: CGFloat = 320
     private var didApplyInitialSplitPosition = false
 
     override init(frame frameRect: NSRect) {
@@ -597,11 +600,13 @@ private final class InvisibleDividerResultsSplitContainer: NSView {
         leadingMinWidth: CGFloat,
         leadingIdealWidth: CGFloat,
         leadingMaxWidth: CGFloat,
+        trailingMinWidth: CGFloat,
         dividerHitWidth: CGFloat
     ) {
         self.leadingMinWidth = leadingMinWidth
         self.leadingIdealWidth = leadingIdealWidth
         self.leadingMaxWidth = leadingMaxWidth
+        self.trailingMinWidth = trailingMinWidth
         splitView.dragHitWidth = dividerHitWidth
         applyInitialSplitPositionIfNeeded()
     }
@@ -630,16 +635,36 @@ private final class InvisibleDividerResultsSplitContainer: NSView {
     }
 
     private func applyInitialSplitPositionIfNeeded() {
-        guard !didApplyInitialSplitPosition, splitView.bounds.width > 0 else {
+        guard splitView.subviews.count >= 2, splitView.bounds.width > 0 else {
             return
         }
+
+        if !didApplyInitialSplitPosition {
+            let initial = constrainedLeadingWidth(for: leadingIdealWidth)
+            splitView.setPosition(initial, ofDividerAt: 0)
+            didApplyInitialSplitPosition = true
+        }
+
+        let current = splitView.subviews[0].frame.width
+        let clamped = constrainedLeadingWidth(for: current)
+        if (current - clamped).magnitude > 0.5 {
+            splitView.setPosition(clamped, ofDividerAt: 0)
+        }
+    }
+
+    private func constrainedLeadingWidth(for proposed: CGFloat) -> CGFloat {
         let availableWidth = splitView.bounds.width - splitView.dividerThickness
         guard availableWidth > 0 else {
-            return
+            return 0
         }
-        let clamped = min(max(leadingIdealWidth, leadingMinWidth), min(leadingMaxWidth, availableWidth))
-        splitView.setPosition(clamped, ofDividerAt: 0)
-        didApplyInitialSplitPosition = true
+
+        let absoluteMin = max(0, min(leadingMinWidth, availableWidth))
+        let maxByTrailing = availableWidth - trailingMinWidth
+        let hardMax = min(leadingMaxWidth, maxByTrailing, availableWidth)
+        if hardMax <= absoluteMin {
+            return absoluteMin
+        }
+        return min(max(proposed, absoluteMin), hardMax)
     }
 }
 
