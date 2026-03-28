@@ -770,6 +770,12 @@ final class NativeScanStore: ObservableObject {
             return
         }
 
+        if case .completed? = pendingTerminalEvent {
+            // Drop stale queue-drained completion from a previous idle phase so
+            // it cannot immediately overwrite this optimistic expansion intent.
+            pendingTerminalEvent = nil
+        }
+
         let queued = ds_scan_enqueue_expand_ref(handle, nodeId) != 0
         guard queued else {
             NSSound.beep()
@@ -1309,7 +1315,7 @@ final class NativeScanStore: ObservableObject {
 
         switch terminal {
         case .completed:
-            let hadOptimistic = clearOptimisticExpansions()
+            let hadOptimistic = clearReconciledOptimisticExpansions()
             if hadOptimistic {
                 modelVersion &+= 1
             }
@@ -1689,6 +1695,28 @@ final class NativeScanStore: ObservableObject {
             return false
         }
         optimisticExpandingNodeIds.removeAll(keepingCapacity: true)
+        return true
+    }
+
+    @discardableResult
+    private func clearReconciledOptimisticExpansions() -> Bool {
+        guard !optimisticExpandingNodeIds.isEmpty else {
+            return false
+        }
+
+        let retained = optimisticExpandingNodeIds.filter { nodeId in
+            guard let node = nodes[nodeId] else {
+                return false
+            }
+            // Keep optimistic state only while node is still deferred and not errored.
+            return node.childrenState == .collapsedByThreshold && !node.errorFlag
+        }
+
+        if retained.count == optimisticExpandingNodeIds.count {
+            return false
+        }
+
+        optimisticExpandingNodeIds = Set(retained)
         return true
     }
 

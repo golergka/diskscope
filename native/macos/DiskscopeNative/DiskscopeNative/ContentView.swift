@@ -680,6 +680,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
         private var childrenCache: [UInt64: ChildCacheEntry] = [:]
         private var iconCache: [String: NSImage] = [:]
         private var contextNodeId: UInt64?
+        private weak var contextOutlineView: NSOutlineView?
 
         init(parent: HierarchyOutlineView) {
             self.parent = parent
@@ -694,6 +695,7 @@ private struct HierarchyOutlineView: NSViewRepresentable {
             }
 
             contextNodeId = nodeId
+            contextOutlineView = outlineView
             let menu = NSMenu(title: "Node")
             menu.autoenablesItems = false
 
@@ -764,6 +766,21 @@ private struct HierarchyOutlineView: NSViewRepresentable {
                 return
             }
             parent.onContextAction(nodeId, action)
+            refreshContextRow(nodeId: nodeId)
+        }
+
+        private func refreshContextRow(nodeId: UInt64) {
+            guard let outlineView = contextOutlineView else {
+                return
+            }
+            let item = treeItem(for: nodeId)
+            let row = outlineView.row(forItem: item)
+            guard row >= 0 else {
+                return
+            }
+            let rowIndexes = IndexSet(integer: row)
+            let columnIndexes = IndexSet(integersIn: 0..<max(1, outlineView.numberOfColumns))
+            outlineView.reloadData(forRowIndexes: rowIndexes, columnIndexes: columnIndexes)
         }
 
         func resetAllCaches() {
